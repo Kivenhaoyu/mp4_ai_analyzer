@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.5.0)
 project(mp4_ai_analyzer)
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # 1. 配置FFmpeg
@@ -35,10 +35,22 @@ endforeach()
 # 创建目标
 add_executable(${PROJECT_NAME} ${ALL_SOURCE_FILES})
 
+# 1. 找到 macOS 系统框架（CoreFoundation、CoreVideo）
+find_library(CORE_FOUNDATION CoreFoundation)
+find_library(CORE_VIDEO CoreVideo)
+
+# 2. 找到 iconv 库（macOS 系统自带，无需额外安装）
+find_library(ICONV_LIB iconv)
+find_library(Z_LIB z)
+
 # 5. 链接依赖
 target_link_libraries(
     ${PROJECT_NAME}
     ${FFMPEG_LIBS}
     ${OPENCV_LIBS}
+    ${CORE_VIDEO}
+    ${CORE_FOUNDATION}
+    ${Z_LIB} # libz.tbd（压缩库）
+    ${ICONV_LIB} #libiconv.tbd（字符编码转换库）
     pthread
 )

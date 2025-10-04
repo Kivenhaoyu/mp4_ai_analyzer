@@ -19,13 +19,14 @@ extern "C" {
 
 class FFmpegDecoder {
 public:
-    FFmpegDecoder(){};
+    FFmpegDecoder();
     bool open(const std::string& file_path);
     void close();
     bool getFrame(AVFrame *frame);
     int getVideoWidth();
     int getVideoHeight();
     std::string getErrorMsg();
+    std::string getVideoCodecName();
 private:
     // 格式上下文（存储视频文件整体信息：路径，流数量，时长等）
     AVFormatContext *format_ctx_ = nullptr;
@@ -37,6 +38,8 @@ private:
     const AVCodec *codec_ = nullptr;
     // 错误信息（记录打开/解码过程中的错误，方便调试）
     std::string error_msg_;
+    // 数据包
+    AVPacket *packet_ = nullptr;
 };
 
 #endif /* DECODER_H_ */

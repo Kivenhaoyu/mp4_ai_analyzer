@@ -7,6 +7,10 @@
 
 #include "decoder.h"
 
+FFmpegDecoder::FFmpegDecoder() {
+    packet_ = av_packet_alloc();
+}
+
 bool FFmpegDecoder::open(const std::string& file_path) {
     // 打开文件路径
     if(file_path.empty()){
@@ -72,6 +76,7 @@ bool FFmpegDecoder::open(const std::string& file_path) {
     }
     return true;
 }
+
 void FFmpegDecoder::close() {
     if (codec_ctx_) {
         avcodec_close(codec_ctx_);
@@ -85,17 +90,68 @@ void FFmpegDecoder::close() {
     video_stream_index_ = -1;
     codec_ = nullptr;
     error_msg_.clear();
+    av_packet_free(&packet_);
     
 }
+
 bool FFmpegDecoder::getFrame(AVFrame *frame) {
-    
+    if (!format_ctx_ || !codec_ctx_ || video_stream_index_ < 0 || !packet_ || !frame) {
+        error_msg_ = "解码器初始化参数无效";
+        return false;
+    }
+    while(true) {
+        // 读取一个数据包（压缩数据）
+        int ret = av_read_frame(format_ctx_, packet_);
+        if (ret < 0) {
+            // 读取完毕或者出错：尝试 flush 解码器中剩余的帧
+            avcodec_send_packet(codec_ctx_, nullptr);
+        }else {
+            // 只处理视频流的数据包
+            if (packet_->stream_index != video_stream_index_) {
+                av_packet_unref(packet_);
+                continue;
+            }
+            
+            // 将数据包发送到解码器
+            if (avcodec_send_packet(codec_ctx_, packet_) < 0) {
+                std::cerr << "发送数据包到解码器失败" << std::endl;
+                av_packet_unref(packet_);
+                return false;
+            }
+            av_packet_unref(packet_);
+        }
+        ret = avcodec_receive_frame(codec_ctx_, frame);
+        if (ret == 0) {
+            return true;
+        } else if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+            // EAGAIN: 需要更多数据；EOF: 解码器已无数据
+            if (ret == AVERROR_EOF) {
+                return false;
+            }
+            continue;
+        }else {
+            // 其他错误
+            std::cerr << "解码失败，错误码: " << ret << std::endl;
+            return false;
+        }
+    }
 }
+
 int FFmpegDecoder::getVideoWidth() {
-    
+    AVCodecParameters* codec_par = format_ctx_->streams[video_stream_index_]->codecpar;
+    return codec_par->width;
 }
+
 int FFmpegDecoder::getVideoHeight() {
-    
+    AVCodecParameters* codec_par = format_ctx_->streams[video_stream_index_]->codecpar;
+    return codec_par->height;
 }
+
+std::string FFmpegDecoder::getVideoCodecName() {
+    AVCodecParameters* codec_par = format_ctx_->streams[video_stream_index_]->codecpar;
+    return avcodec_get_name(codec_par->codec_id);
+}
+
 std::string FFmpegDecoder::getErrorMsg() {
     return error_msg_;
 }
