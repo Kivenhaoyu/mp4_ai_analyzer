@@ -1,0 +1,11 @@
+third_party/*
+data/*
+build/project/*
+lib/ffmpeg_install/share/
+lib/ffmpeg_install/bin/
+lib/models/*
+lib/opencv-install/*
+lib/openssl-install/*
+
+
+.DS_Store

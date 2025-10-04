@@ -1,0 +1,14 @@
+prefix=/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/ffmpeg_install
+exec_prefix=${prefix}
+libdir=/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/ffmpeg_install/lib
+includedir=/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/ffmpeg_install/include
+
+Name: libavformat
+Description: FFmpeg container format library
+Version: 60.3.100
+Requires: libavcodec >= 60.3.100, libavutil >= 58.2.100
+Requires.private: 
+Conflicts:
+Libs: -L${libdir}  -lavformat -lm -lz
+Libs.private: 
+Cflags: -I${includedir}

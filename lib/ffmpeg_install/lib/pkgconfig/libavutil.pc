@@ -1,0 +1,14 @@
+prefix=/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/ffmpeg_install
+exec_prefix=${prefix}
+libdir=/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/ffmpeg_install/lib
+includedir=/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/ffmpeg_install/include
+
+Name: libavutil
+Description: FFmpeg utility library
+Version: 58.2.100
+Requires: 
+Requires.private: 
+Conflicts:
+Libs: -L${libdir}  -lavutil -pthread -lm -framework CoreFoundation -framework CoreVideo -framework CoreMedia
+Libs.private: 
+Cflags: -I${includedir}

@@ -1,0 +1,14 @@
+prefix=/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/ffmpeg_install
+exec_prefix=${prefix}
+libdir=/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/ffmpeg_install/lib
+includedir=/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/ffmpeg_install/include
+
+Name: libswscale
+Description: FFmpeg image rescaling library
+Version: 7.1.100
+Requires: libavutil >= 58.2.100
+Requires.private: 
+Conflicts:
+Libs: -L${libdir}  -lswscale -lm
+Libs.private: 
+Cflags: -I${includedir}
