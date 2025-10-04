@@ -3,8 +3,11 @@ data/*
 build/project/*
 lib/ffmpeg_install/share/
 lib/ffmpeg_install/bin/
+
+lib/opencv-install/share/
+lib/opencv-install/bin/
+
 lib/models/*
-lib/opencv-install/*
 lib/openssl-install/*
 
 
