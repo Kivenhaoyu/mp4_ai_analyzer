@@ -1,0 +1,14 @@
+prefix=/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/ffmpeg_install
+exec_prefix=${prefix}
+libdir=/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/ffmpeg_install/lib
+includedir=/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/ffmpeg_install/include
+
+Name: libavdevice
+Description: FFmpeg device handling library
+Version: 60.1.100
+Requires: libavformat >= 60.3.100, libavcodec >= 60.3.100, libavutil >= 58.2.100
+Requires.private: 
+Conflicts:
+Libs: -L${libdir}  -lavdevice -framework Foundation -lm -framework AVFoundation -framework CoreVideo -framework CoreMedia -pthread -framework CoreGraphics
+Libs.private: 
+Cflags: -I${includedir}
