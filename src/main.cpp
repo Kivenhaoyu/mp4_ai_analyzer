@@ -101,6 +101,7 @@ void testCamera() {
     // 初始化 AI 推理器
     AIInfer ai_infer;
     std::string model_path = "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/models/mobilenetv2-12.onnx";
+//    std::string model_path = "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/models/resnet50-v1-7.onnx";
     if (!ai_infer.init(model_path)) {
         std::cerr << "AI模型初始化失败，退出测试" << std::endl;
         delete[] model_input;  // 提前释放缓冲区
@@ -309,9 +310,9 @@ void testLocalFile(string& file_path) {
         auto resize_end = std::chrono::high_resolution_clock::now();
         double resize_ms = std::chrono::duration<double,milli>(resize_end - resize_start).count();
         
-        // 保存缩放后的JPG，检查尺寸和画质
-        decoder.saveRGBFrameToJPG(resize_frame, "resized_frame_" + std::to_string(i) + ".jpg");
-        std::cout << "缩放后帧尺寸：" << resize_frame->width << "×" << resize_frame->height << std::endl;
+//        // 保存缩放后的JPG，检查尺寸和画质
+//        decoder.saveRGBFrameToJPG(resize_frame, "resized_frame_" + std::to_string(i) + ".jpg");
+//        std::cout << "缩放后帧尺寸：" << resize_frame->width << "×" << resize_frame->height << std::endl;
         
         
         auto normalize_start = std::chrono::high_resolution_clock::now();
@@ -379,7 +380,7 @@ void testCameraWith25FPS() {
 
 int main() {
     //    avformat_network_init();
-    string file_path = "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/data/水杯.mp4";
+    string file_path = "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/data/狗.mp4";
     //    testLocalFile(file_path);
     //    testCamera();
     testLocalFile(file_path);

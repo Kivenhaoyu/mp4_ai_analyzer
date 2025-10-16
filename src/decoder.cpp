@@ -11,19 +11,19 @@
 
 cv::Mat cropBlackEdges(const cv::Mat& bgr_mat) {
     if (bgr_mat.empty()) return bgr_mat;
-
+    
     // 1. 转换为灰度图，便于检测黑边（黑边的灰度值接近0）
     cv::Mat gray_mat;
     cv::cvtColor(bgr_mat, gray_mat, cv::COLOR_BGR2GRAY);
-
+    
     // 2. 阈值化：将接近黑色（<10）的区域视为黑边
     cv::Mat thresh_mat;
     cv::threshold(gray_mat, thresh_mat, 10, 255, cv::THRESH_BINARY); // 非黑边区域为255（白）
-
+    
     // 3. 找到非黑边区域的边界
     int top = 0, bottom = thresh_mat.rows - 1;
     int left = 0, right = thresh_mat.cols - 1;
-
+    
     // 找顶部边界（第一个非黑边行）
     while (top <= bottom && cv::countNonZero(thresh_mat.row(top)) == 0) top++;
     // 找底部边界（最后一个非黑边行）
@@ -32,7 +32,7 @@ cv::Mat cropBlackEdges(const cv::Mat& bgr_mat) {
     while (left <= right && cv::countNonZero(thresh_mat.col(left)) == 0) left++;
     // 找右侧边界（最后一个非黑边列）
     while (right >= left && cv::countNonZero(thresh_mat.col(right)) == 0) right--;
-
+    
     // 4. 裁剪：如果所有区域都是黑边，则返回原图
     if (top > bottom || left > right) {
         return bgr_mat;
@@ -543,23 +543,42 @@ bool FFmpegDecoder::resizeRGBFrame(const AVFrame *src_rgb, AVFrame *dst_rgb, int
     cv::Mat bgr_mat;
     cv::cvtColor(src_mat, bgr_mat, cv::COLOR_RGB2BGR);
     
-    // 3. 缩放：保持原图比例，边缘填充黑色（避免拉伸）
-    cv::Mat resized_bgr;
-    double scale = std::min((double)dst_w/bgr_mat.cols,(double)dst_h/bgr_mat.rows);
-    int new_w = bgr_mat.cols * scale;
-    int new_h = bgr_mat.rows * scale;
-    
+    // 先裁剪原始黑边
     cv::Mat cropped_mat = cropBlackEdges(bgr_mat);
-
+    if (cropped_mat.empty()) {
+        error_msg_ = "裁剪黑边后图像为空";
+        return false;
+    }
     
-    cv::resize(cropped_mat, resized_bgr, cv::Size(new_w, new_h), 0, 0, cv::INTER_LINEAR); // 线性插值，画质更优
+    // 调整比例：裁剪至与目标尺寸相同的宽高比，避免填充黑边
+    int src_cropped_w = cropped_mat.cols;
+    int src_cropped_h = cropped_mat.rows;
+    double target_ratio = (double)dst_w / dst_h; // 目标比例（如224/224=1）
+    double src_ratio = (double)src_cropped_w / src_cropped_h;
     
-    // 4. 填充到目标尺寸（居中放置，边缘补黑）
-    cv::Mat dst_bgr(dst_h,dst_w,CV_8UC3,cv::Scalar(0,0,0)); //黑色背景
-    cv::Rect roi((dst_w - new_w)/2,(dst_h - new_h) / 2, new_w, new_h); //居中 ROI
-    resized_bgr.copyTo(dst_bgr(roi));
+    cv::Mat ratio_adjusted_mat;
+    if (src_ratio > target_ratio) {
+        // 原图更宽：裁剪左右两侧
+        int new_w = src_cropped_h * target_ratio;
+        int x = (src_cropped_w - new_w) / 2;
+        // 确保裁剪区域有效（避免x为负或new_w超出范围）
+        x = std::max(0, x);
+        new_w = std::min(new_w, src_cropped_w - x);
+        ratio_adjusted_mat = cropped_mat(cv::Rect(x, 0, new_w, src_cropped_h));
+    } else {
+        // 原图更高：裁剪上下两侧
+        int new_h = src_cropped_w / target_ratio;
+        int y = (src_cropped_h - new_h) / 2;
+        // 确保裁剪区域有效
+        y = std::max(0, y);
+        new_h = std::min(new_h, src_cropped_h - y);
+        ratio_adjusted_mat = cropped_mat(cv::Rect(0, y, src_cropped_w, new_h));
+    }
     
-    // 5. cv::Mat→AVFrame（RGB24格式）
+    // 直接缩放到目标尺寸（无填充，无黑边）
+    cv::Mat resized_bgr;
+    cv::resize(ratio_adjusted_mat, resized_bgr, cv::Size(dst_w, dst_h), 0, 0, cv::INTER_LINEAR);
+    
     // 确保输出帧缓冲区有效
     if (dst_rgb->width != dst_w || dst_rgb->height != dst_h || dst_rgb->format != AV_PIX_FMT_RGB24) {
         av_frame_unref(dst_rgb);
@@ -571,10 +590,9 @@ bool FFmpegDecoder::resizeRGBFrame(const AVFrame *src_rgb, AVFrame *dst_rgb, int
             return false;
         }
     }
-    
     // BGR→RGB，复制数据到AVFrame
     cv::Mat dst_rgb_mat;
-    cv::cvtColor(dst_bgr, dst_rgb_mat, cv::COLOR_BGR2RGB);
+    cv::cvtColor(resized_bgr, dst_rgb_mat, cv::COLOR_BGR2RGB);
     for (int i = 0; i < dst_h; ++i) {
         memcpy(
                dst_rgb->data[0] + i * dst_rgb->linesize[0], // 目标行地址
@@ -582,49 +600,78 @@ bool FFmpegDecoder::resizeRGBFrame(const AVFrame *src_rgb, AVFrame *dst_rgb, int
                dst_w * 3                                     // 每行字节数（RGB24：1像素3字节）
                );
     }
+    
     return true;
 }
 
 bool FFmpegDecoder::normalizeRGBFrame(const AVFrame* rgb_frame, float* output_buf,
-                                     const std::vector<float>& mean,
-                                     const std::vector<float>& std) {
-    // 1. 入参校验
-    if (!rgb_frame || !output_buf) {
-        error_msg_ = "归一化失败：输入帧/输出缓冲区为空";
+                                      const std::vector<float>& mean,
+                                      const std::vector<float>& std) {
+    // 入参校验（保留核心检查）
+    if (!rgb_frame || !output_buf || rgb_frame->format != AV_PIX_FMT_RGB24) {
+        error_msg_ = "归一化失败：输入帧无效或格式不是RGB24";
         return false;
     }
-    if (rgb_frame->format != AV_PIX_FMT_RGB24) {
-        error_msg_ = "归一化失败：输入帧不是RGB24格式";
+    if (std[0] == 0 || std[1] == 0 || std[2] == 0) {
+        error_msg_ = "归一化失败：标准差不能为0";
         return false;
     }
-    for (float i : std) {
-        if (i == 0) {
-            error_msg_ = "归一化失败：std（标准差）不能为0";
-            return false;
+    
+    const int frame_w = rgb_frame->width;
+    const int frame_h = rgb_frame->height;
+    const int channel_size = frame_w * frame_h; // 单通道像素数
+    
+    // 1. 预计算常数倒数（除法转乘法，提升速度）
+    const float inv_255 = 1.0f / 255.0f;
+    const float inv_std[3] = {1.0f / std[0], 1.0f / std[1], 1.0f / std[2]};
+    const float mean_vals[3] = {mean[0], mean[1], mean[2]};
+    
+    // 2. 按行遍历（缓存友好：连续内存访问 NHWC格式：RRRGGGBBB....）
+    for (int h = 0; h < frame_h; ++h) {
+        // 行数据地址
+        const uint8_t* row_data = rgb_frame->data[0] + h * rgb_frame->linesize[0];
+        // 当前行在单通道中的起始索引
+        const int row_base = h * frame_w;
+        
+        // 3. 循环展开（处理4个像素/次，减少循环次数）
+        int w = 0;
+        for (; w < frame_w - 3; w += 4) {
+            // 一次性读取4个像素的RGB数据（共12字节）
+            const uint8_t* pixel = row_data + w * 3;
+            
+            // 计算4个像素的R通道（并行处理）
+            output_buf[row_base + w]     = (pixel[0] * inv_255 - mean_vals[0]) * inv_std[0];
+            output_buf[row_base + w + 1] = (pixel[3] * inv_255 - mean_vals[0]) * inv_std[0];
+            output_buf[row_base + w + 2] = (pixel[6] * inv_255 - mean_vals[0]) * inv_std[0];
+            output_buf[row_base + w + 3] = (pixel[9] * inv_255 - mean_vals[0]) * inv_std[0];
+            
+            // 计算4个像素的G通道
+            output_buf[channel_size + row_base + w]     = (pixel[1] * inv_255 - mean_vals[1]) * inv_std[1];
+            output_buf[channel_size + row_base + w + 1] = (pixel[4] * inv_255 - mean_vals[1]) * inv_std[1];
+            output_buf[channel_size + row_base + w + 2] = (pixel[7] * inv_255 - mean_vals[1]) * inv_std[1];
+            output_buf[channel_size + row_base + w + 3] = (pixel[10] * inv_255 - mean_vals[1]) * inv_std[1];
+            
+            // 计算4个像素的B通道
+            output_buf[2 * channel_size + row_base + w]     = (pixel[2] * inv_255 - mean_vals[2]) * inv_std[2];
+            output_buf[2 * channel_size + row_base + w + 1] = (pixel[5] * inv_255 - mean_vals[2]) * inv_std[2];
+            output_buf[2 * channel_size + row_base + w + 2] = (pixel[8] * inv_255 - mean_vals[2]) * inv_std[2];
+            output_buf[2 * channel_size + row_base + w + 3] = (pixel[11] * inv_255 - mean_vals[2]) * inv_std[2];
+        }
+        
+        // 处理剩余像素（不足4个的部分）
+        for (; w < frame_w; ++w) {
+            const uint8_t* pixel = row_data + w * 3;
+            const int idx = row_base + w;
+            output_buf[idx] = (pixel[0] * inv_255 - mean_vals[0]) * inv_std[0];
+            output_buf[channel_size + idx] = (pixel[1] * inv_255 - mean_vals[1]) * inv_std[1];
+            output_buf[2 * channel_size + idx] = (pixel[2] * inv_255 - mean_vals[2]) * inv_std[2];
         }
     }
-
-    int frame_w = rgb_frame->width;
-    int frame_h = rgb_frame->height;
-    int pixel_count = frame_w * frame_h; // 总像素数
-    int output_size = pixel_count * 3;   // 输出缓冲区大小（3通道）
-
-    // 2. 遍历每个像素，执行归一化
-    for (int row = 0; row < frame_h; ++row) {
-        // 每行像素数据的起始地址（考虑linesize对齐）
-        const uint8_t* row_data = rgb_frame->data[0] + row * rgb_frame->linesize[0];
-        for (int col = 0; col < frame_w; ++col) {
-            // 计算当前像素在输出缓冲区的索引（R→G→B顺序）
-            int idx = (row * frame_w + col) * 3;
-            // 归一化公式：output = (像素值/255.0 - mean) / std
-            output_buf[idx + 0] = (row_data[col * 3 + 0] / 255.0f - mean[0]) / std[0]; // R通道
-            output_buf[idx + 1] = (row_data[col * 3 + 1] / 255.0f - mean[1]) / std[1]; // G通道
-            output_buf[idx + 2] = (row_data[col * 3 + 2] / 255.0f - mean[2]) / std[2]; // B通道
-        }
-    }
-
+    
     return true;
 }
+
+
 
 
 #pragma mark -- Error --
