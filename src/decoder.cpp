@@ -519,6 +519,68 @@ bool FFmpegDecoder::saveRGBFrameToJPG(const AVFrame* rgb_frame, const std::strin
     
 }
 
+bool FFmpegDecoder::resizeRGBFrameWithBlank(const AVFrame *src_rgb, AVFrame *dst_rgb, int dst_w, int dst_h){
+    // 1. 入参检验
+    if (!src_rgb || !dst_rgb) {
+        error_msg_ = "缩放失败：输入/输出帧为空！！！";
+        return false;
+    }
+    
+    if (src_rgb->format != AV_PIX_FMT_RGB24) {
+        error_msg_ = "缩放失败：输入帧不是RGB24格式（实际格式：" + std::to_string(src_rgb->format) + "）";
+        return false;
+    }
+    
+    cv::Mat src_mat(
+                    src_rgb->height,
+                    src_rgb->width,
+                    CV_8UC3,
+                    src_rgb->data[0],
+                    src_rgb->linesize[0]
+                    );
+    
+    // OpenCV默认处理BGR，需转换（避免颜色异常）
+    cv::Mat bgr_mat;
+    cv::cvtColor(src_mat, bgr_mat, cv::COLOR_RGB2BGR);
+    
+    // 3. 缩放：保持原图比例，边缘填充黑色（避免拉伸）
+    cv::Mat resized_bgr;
+    double scale = std::min((double)dst_w/bgr_mat.cols,(double)dst_h/bgr_mat.rows);
+    int new_w = bgr_mat.cols * scale;
+    int new_h = bgr_mat.rows * scale;
+    cv::resize(bgr_mat, resized_bgr, cv::Size(new_w, new_h), 0, 0, cv::INTER_LINEAR); // 线性插值，画质更优
+    
+    // 4. 填充到目标尺寸（居中放置，边缘补黑）
+    cv::Mat dst_bgr(dst_h,dst_w,CV_8UC3,cv::Scalar(0,0,0)); //黑色背景
+    cv::Rect roi((dst_w - new_w)/2,(dst_h - new_h) / 2, new_w, new_h); //居中 ROI
+    resized_bgr.copyTo(dst_bgr(roi));
+    
+    // 5. cv::Mat→AVFrame（RGB24格式）
+    // 确保输出帧缓冲区有效
+    if (dst_rgb->width != dst_w || dst_rgb->height != dst_h || dst_rgb->format != AV_PIX_FMT_RGB24) {
+        av_frame_unref(dst_rgb);
+        dst_rgb->width = dst_w;
+        dst_rgb->height = dst_h;
+        dst_rgb->format = AV_PIX_FMT_RGB24;
+        if (av_frame_get_buffer(dst_rgb, 32) < 0) {
+            error_msg_ = "缩放失败：输出帧缓冲区分配失败";
+            return false;
+        }
+    }
+    
+    // BGR→RGB，复制数据到AVFrame
+    cv::Mat dst_rgb_mat;
+    cv::cvtColor(dst_bgr, dst_rgb_mat, cv::COLOR_BGR2RGB);
+    for (int i = 0; i < dst_h; ++i) {
+        memcpy(
+               dst_rgb->data[0] + i * dst_rgb->linesize[0], // 目标行地址
+               dst_rgb_mat.data + i * dst_rgb_mat.step,      // 源行地址
+               dst_w * 3                                     // 每行字节数（RGB24：1像素3字节）
+               );
+    }
+    return true;
+}
+
 bool FFmpegDecoder::resizeRGBFrame(const AVFrame *src_rgb, AVFrame *dst_rgb, int dst_w, int dst_h){
     // 1. 入参检验
     if (!src_rgb || !dst_rgb) {

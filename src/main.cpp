@@ -303,7 +303,7 @@ void testLocalFile(string& file_path) {
 //        }
         
         auto resize_start = std::chrono::high_resolution_clock::now();
-        if (!decoder.resizeRGBFrame(rgb_frame, resize_frame)) {
+        if (!decoder.resizeRGBFrameWithBlank(rgb_frame, resize_frame)) {
             std::cerr << "第" << i+1 << "帧缩放失败：" << decoder.getErrorMsg() << std::endl;
             continue;
         }

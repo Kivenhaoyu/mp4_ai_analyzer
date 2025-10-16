@@ -37,7 +37,10 @@ public:
     
     bool saveRGBFrameToJPG(const AVFrame* rgb_frame, const std::string &save_path);
     
-    // RGB帧缩放至目标尺寸（默认224×224，AI模型常用）
+    // 留边框的裁剪
+    bool resizeRGBFrameWithBlank(const AVFrame *src_rgb, AVFrame *dst_rgb, int dst_w = 224, int dst_h = 224);
+    
+    // 不留边框 RGB帧缩放至目标尺寸（默认224×224，AI模型常用）
     bool resizeRGBFrame(const AVFrame* src_rgb, AVFrame* dst_rgb, int dst_w = 224, int dst_h = 224);
     
     // RGB帧像素归一化：[0,255]→[(x/255 - mean)/std]（默认mean=0.5, std=0.5→范围[-1,1]）
