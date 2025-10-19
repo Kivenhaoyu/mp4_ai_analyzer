@@ -73,8 +73,11 @@ bool AIInfer::init(const std::string &model_path) {
         std::cout << "ONNX模型加载成功，输入节点：" << input_names_[0]
         << "，输出节点：" << output_names_[0] << "\n" << std::endl;
         
+//        imagenet_labels_ = load_imagenet_labels(
+//            "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/imagenet_labels_chinese.txt"
+//        );
         imagenet_labels_ = load_imagenet_labels(
-            "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/imagenet_labels_chinese.txt"
+            "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/imagenet_labels.txt"
         );
         return true;
         

@@ -17,6 +17,7 @@
 #include "frame_pool.h"
 #include "frame_guard.h"
 #include "ai_infer.h"
+#include "cv_renderer.h"
 using namespace std;
 
 
@@ -90,6 +91,8 @@ void testCamera() {
     << "，高=" << height
     << "，目标帧率=" << decoder.getVideoCodecName() << std::endl;
     
+    CVFrameRenderer renderer("AI Camera Window", width / 2, height / 2); // 窗口名+初始尺寸
+    
     AVFramePool yuvpool(3,width,height,AV_PIX_FMT_UYVY422);
     AVFramePool rgbpool(3,width,height,AV_PIX_FMT_RGB24);
     AVFramePool resizedpool(3,224,224,AV_PIX_FMT_RGB24);
@@ -101,7 +104,7 @@ void testCamera() {
     // 初始化 AI 推理器
     AIInfer ai_infer;
     std::string model_path = "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/models/mobilenetv2-12.onnx";
-//    std::string model_path = "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/models/resnet50-v1-7.onnx";
+    //    std::string model_path = "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/models/resnet50-v1-7.onnx";
     if (!ai_infer.init(model_path)) {
         std::cerr << "AI模型初始化失败，退出测试" << std::endl;
         delete[] model_input;  // 提前释放缓冲区
@@ -112,8 +115,8 @@ void testCamera() {
     //AI模型归一化参数
     const std::vector<float> mean = {0.485f, 0.456f, 0.406f};  // R, G, B 三个通道的均值
     const std::vector<float> std = {0.229f, 0.224f, 0.225f};   // 三个通道的标准差
-    
-    for (int i = 0; i < 10; ++i) {
+    long long i = 0;
+    while(!renderer.shouldQuit()) {
         //        auto yuv_frame = yuvpool.getFrame();
         //        auto rgb_frame = rgbpool.getFrame(); // 用于接收RGB数据
         //        auto resize_frame = resizedpool.getFrame();
@@ -165,10 +168,10 @@ void testCamera() {
         auto resize_end = std::chrono::high_resolution_clock::now();
         double resize_ms = std::chrono::duration<double,milli>(resize_end - resize_start).count();
         
-//        // 保存缩放后的JPG，检查尺寸和画质
-//        decoder.saveRGBFrameToJPG(resize_frame, "resized_frame_" + std::to_string(i) + ".jpg");
-//        std::cout << "缩放后帧尺寸：" << resize_frame->width << "×" << resize_frame->height << std::endl;
-//
+        //        // 保存缩放后的JPG，检查尺寸和画质
+        //        decoder.saveRGBFrameToJPG(resize_frame, "resized_frame_" + std::to_string(i) + ".jpg");
+        //        std::cout << "缩放后帧尺寸：" << resize_frame->width << "×" << resize_frame->height << std::endl;
+        //
         
         auto normalize_start = std::chrono::high_resolution_clock::now();
         if (!decoder.normalizeRGBFrame(resize_frame, model_input, mean, std)) {
@@ -183,6 +186,18 @@ void testCamera() {
         AIResult ai_result = ai_infer.infer(model_input, model_input_size);
         auto ai_end = std::chrono::high_resolution_clock::now();
         double ai_ms = std::chrono::duration<double,milli>(ai_end - ai_start).count();
+        
+        //渲染画面显示结果
+        
+        string render_text = ai_result.is_valid ?
+                    (ai_result.class_name + " | confidence:" + std::to_string(ai_result.confidence).substr(0, 4)) :
+                    "Unrecognized";
+        renderer.render(
+                        rgb_frame->data[0],  // RGB数据
+                        rgb_frame->width,    // 宽度
+                        rgb_frame->height,   // 高度
+                        render_text          // 叠加文字
+                        );
         
         //打印AI推理结果
         std::cout << "【第" << i+1 << "帧 AI结果】";
@@ -236,6 +251,8 @@ void testLocalFile(string& file_path) {
     << "，高=" << height
     << "，目标帧率=" << decoder.getVideoCodecName() << std::endl;
     
+    CVFrameRenderer renderer("AI Local File Window", width / 2, height / 2); // 窗口名+初始尺寸
+    
     AVFramePool yuvpool(3,width,height,AV_PIX_FMT_YUV420P);
     AVFramePool rgbpool(3,width,height,AV_PIX_FMT_RGB24);
     AVFramePool resizedpool(3,224,224,AV_PIX_FMT_RGB24);
@@ -257,8 +274,8 @@ void testLocalFile(string& file_path) {
     //AI模型归一化参数
     const std::vector<float> mean = {0.485f, 0.456f, 0.406f};  // R, G, B 三个通道的均值
     const std::vector<float> std = {0.229f, 0.224f, 0.225f};   // 三个通道的标准差
-    
-    for (int i = 0; i < 100; ++i) {
+    long long i = 0;
+    while (!renderer.shouldQuit()) {
         //        auto yuv_frame = yuvpool.getFrame();
         //        auto rgb_frame = rgbpool.getFrame(); // 用于接收RGB数据
         //        auto resize_frame = resizedpool.getFrame();
@@ -278,8 +295,8 @@ void testLocalFile(string& file_path) {
         // 1. 解码耗时
         auto decode_start = std::chrono::high_resolution_clock::now();
         if (!decoder.getFrame(yuv_frame)) {
-            std::cerr << "解码第" << i+1 << "帧失败：" << decoder.getErrorMsg() << std::endl;
-            continue;
+            std::cerr << "解码结束！！！" << decoder.getErrorMsg() << std::endl;
+            break;
         }
         auto decode_end = std::chrono::high_resolution_clock::now();
         double decode_ms = std::chrono::duration<double,milli>(decode_end - decode_start).count();
@@ -294,13 +311,13 @@ void testLocalFile(string& file_path) {
         double conver_ms = std::chrono::duration<double,milli>(conver_end - conver_start).count();
         
         std::cout << "第" << i+1 << "帧 YUV420→RGB 转换成功" << std::endl;
-//        // （可选）保存RGB帧为图片，验证效果
-//        std::string save_path = "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/data/camera_frame_" + std::to_string(i) + ".jpg";
-//        if (decoder.saveRGBFrameToJPG(rgb_frame, save_path)) {
-//            std::cout << "第" << i+1 << "帧已保存至：" << save_path << std::endl;
-//        } else {
-//            std::cerr << "保存失败：" << decoder.getErrorMsg() << std::endl;
-//        }
+        //        // （可选）保存RGB帧为图片，验证效果
+        //        std::string save_path = "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/data/camera_frame_" + std::to_string(i) + ".jpg";
+        //        if (decoder.saveRGBFrameToJPG(rgb_frame, save_path)) {
+        //            std::cout << "第" << i+1 << "帧已保存至：" << save_path << std::endl;
+        //        } else {
+        //            std::cerr << "保存失败：" << decoder.getErrorMsg() << std::endl;
+        //        }
         
         auto resize_start = std::chrono::high_resolution_clock::now();
         if (!decoder.resizeRGBFrameWithBlank(rgb_frame, resize_frame)) {
@@ -310,9 +327,9 @@ void testLocalFile(string& file_path) {
         auto resize_end = std::chrono::high_resolution_clock::now();
         double resize_ms = std::chrono::duration<double,milli>(resize_end - resize_start).count();
         
-//        // 保存缩放后的JPG，检查尺寸和画质
-//        decoder.saveRGBFrameToJPG(resize_frame, "resized_frame_" + std::to_string(i) + ".jpg");
-//        std::cout << "缩放后帧尺寸：" << resize_frame->width << "×" << resize_frame->height << std::endl;
+        //        // 保存缩放后的JPG，检查尺寸和画质
+        //        decoder.saveRGBFrameToJPG(resize_frame, "resized_frame_" + std::to_string(i) + ".jpg");
+        //        std::cout << "缩放后帧尺寸：" << resize_frame->width << "×" << resize_frame->height << std::endl;
         
         
         auto normalize_start = std::chrono::high_resolution_clock::now();
@@ -328,6 +345,18 @@ void testLocalFile(string& file_path) {
         AIResult ai_result = ai_infer.infer(model_input, model_input_size);
         auto ai_end = std::chrono::high_resolution_clock::now();
         double ai_ms = std::chrono::duration<double,milli>(ai_end - ai_start).count();
+        
+        //渲染画面显示结果
+        
+        string render_text = ai_result.is_valid ?
+                    (ai_result.class_name + " | confidence:" + std::to_string(ai_result.confidence).substr(0, 4)) :
+                    "Unrecognized";
+        renderer.render(
+                        rgb_frame->data[0],  // RGB数据
+                        rgb_frame->width,    // 宽度
+                        rgb_frame->height,   // 高度
+                        render_text          // 叠加文字
+                        );
         
         //打印AI推理结果
         std::cout << "【第" << i+1 << "帧 AI结果】";
@@ -347,6 +376,7 @@ void testLocalFile(string& file_path) {
     ai_infer.destroy();
     delete[] model_input; // 释放缓冲区
     decoder.close();
+    std::cout << "本地视频测试结束" << std::endl;
 }
 
 void testCameraWith25FPS() {
@@ -380,10 +410,9 @@ void testCameraWith25FPS() {
 
 int main() {
     //    avformat_network_init();
-    string file_path = "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/data/狗.mp4";
-    //    testLocalFile(file_path);
-    //    testCamera();
-    testLocalFile(file_path);
+    string file_path = "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/data/天鹅.mp4";
+        testLocalFile(file_path);
+//        testCamera();
     
     //    testSingleFrameDecodeTime(file_path);
     //    avformat_network_deinit();
