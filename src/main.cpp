@@ -117,6 +117,7 @@ void testCamera() {
     const std::vector<float> std = {0.229f, 0.224f, 0.225f};   // 三个通道的标准差
     long long i = 0;
     while(!renderer.shouldQuit()) {
+        i++;
         //        auto yuv_frame = yuvpool.getFrame();
         //        auto rgb_frame = rgbpool.getFrame(); // 用于接收RGB数据
         //        auto resize_frame = resizedpool.getFrame();
@@ -136,33 +137,33 @@ void testCamera() {
         // 1. 解码耗时
         auto decode_start = std::chrono::high_resolution_clock::now();
         if (!decoder.getFrame(yuv_frame)) {
-            std::cerr << "解码第" << i+1 << "帧失败：" << decoder.getErrorMsg() << std::endl;
+            std::cerr << "解码第" << i << "帧失败：" << decoder.getErrorMsg() << std::endl;
             continue;
         }
         auto decode_end = std::chrono::high_resolution_clock::now();
         double decode_ms = std::chrono::duration<double,milli>(decode_end - decode_start).count();
         
-        std::cout << "解码摄像头第" << i+1 << "帧成功" << std::endl;
+        std::cout << "解码摄像头第" << i << "帧成功" << std::endl;
         auto conver_start = std::chrono::high_resolution_clock::now();
         if (!decoder.converUYUV422ToRgb(yuv_frame, rgb_frame)) {
-            std::cerr << "第" << i+1 << "帧转换失败：" << decoder.getErrorMsg() << std::endl;
+            std::cerr << "第" << i << "帧转换失败：" << decoder.getErrorMsg() << std::endl;
             continue;
         }
         auto conver_end = std::chrono::high_resolution_clock::now();
         double conver_ms = std::chrono::duration<double,milli>(conver_end - conver_start).count();
         
-        std::cout << "第" << i+1 << "帧 UYVY422→RGB 转换成功" << std::endl;
+        std::cout << "第" << i << "帧 UYVY422→RGB 转换成功" << std::endl;
         //                // （可选）保存RGB帧为图片，验证效果
         //                std::string save_path = "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/data/camera_frame_" + std::to_string(i) + ".jpg";
         //                if (decoder.saveRGBFrameToJPG(rgb_frame.get(), save_path)) {
-        //                    std::cout << "第" << i+1 << "帧已保存至：" << save_path << std::endl;
+        //                    std::cout << "第" << i << "帧已保存至：" << save_path << std::endl;
         //                } else {
         //                    std::cerr << "保存失败：" << decoder.getErrorMsg() << std::endl;
         //                }
         
         auto resize_start = std::chrono::high_resolution_clock::now();
         if (!decoder.resizeRGBFrame(rgb_frame, resize_frame)) {
-            std::cerr << "第" << i+1 << "帧缩放失败：" << decoder.getErrorMsg() << std::endl;
+            std::cerr << "第" << i << "帧缩放失败：" << decoder.getErrorMsg() << std::endl;
             continue;
         }
         auto resize_end = std::chrono::high_resolution_clock::now();
@@ -175,7 +176,7 @@ void testCamera() {
         
         auto normalize_start = std::chrono::high_resolution_clock::now();
         if (!decoder.normalizeRGBFrame(resize_frame, model_input, mean, std)) {
-            std::cerr << "第" << i+1 << "帧归一化失败：" << decoder.getErrorMsg() << std::endl;
+            std::cerr << "第" << i << "帧归一化失败：" << decoder.getErrorMsg() << std::endl;
             continue;
         }
         auto normalize_end = std::chrono::high_resolution_clock::now();
@@ -200,7 +201,7 @@ void testCamera() {
                         );
         
         //打印AI推理结果
-        std::cout << "【第" << i+1 << "帧 AI结果】";
+        std::cout << "【第" << i << "帧 AI结果】";
         if (ai_result.is_valid) {
             std::cout << "类别：" << ai_result.class_name
             << " | 置信度：" << fixed << setprecision(2) << ai_result.confidence;
@@ -215,7 +216,7 @@ void testCamera() {
         if (cost < 33) {
             std::this_thread::sleep_for(std::chrono::milliseconds(33 - cost));
         }
-        std::cout << "第" << i+1 << "帧：解码=" << decode_ms << "ms，转换=" << conver_ms << "ms，缩放=" << resize_ms << "ms，归一=" << normalize_ms << "ms，AI=" << ai_ms << "ms，总=" << cost << "ms" << std::endl;
+        std::cout << "第" << i << "帧：解码=" << decode_ms << "ms，转换=" << conver_ms << "ms，缩放=" << resize_ms << "ms，归一=" << normalize_ms << "ms，AI=" << ai_ms << "ms，总=" << cost << "ms" << std::endl;
     }
     ai_infer.destroy();
     delete[] model_input; // 释放缓冲区
@@ -276,6 +277,7 @@ void testLocalFile(string& file_path) {
     const std::vector<float> std = {0.229f, 0.224f, 0.225f};   // 三个通道的标准差
     long long i = 0;
     while (!renderer.shouldQuit()) {
+        i++;
         //        auto yuv_frame = yuvpool.getFrame();
         //        auto rgb_frame = rgbpool.getFrame(); // 用于接收RGB数据
         //        auto resize_frame = resizedpool.getFrame();
@@ -301,27 +303,27 @@ void testLocalFile(string& file_path) {
         auto decode_end = std::chrono::high_resolution_clock::now();
         double decode_ms = std::chrono::duration<double,milli>(decode_end - decode_start).count();
         
-        std::cout << "解码本地文件第" << i+1 << "帧成功" << std::endl;
+        std::cout << "解码本地文件第" << i << "帧成功" << std::endl;
         auto conver_start = std::chrono::high_resolution_clock::now();
         if (!decoder.convertYuvToRgb(yuv_frame, rgb_frame)) {
-            std::cerr << "第" << i+1 << "帧转换失败：" << decoder.getErrorMsg() << std::endl;
+            std::cerr << "第" << i << "帧转换失败：" << decoder.getErrorMsg() << std::endl;
             continue;
         }
         auto conver_end = std::chrono::high_resolution_clock::now();
         double conver_ms = std::chrono::duration<double,milli>(conver_end - conver_start).count();
         
-        std::cout << "第" << i+1 << "帧 YUV420→RGB 转换成功" << std::endl;
+        std::cout << "第" << i << "帧 YUV420→RGB 转换成功" << std::endl;
         //        // （可选）保存RGB帧为图片，验证效果
         //        std::string save_path = "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/data/camera_frame_" + std::to_string(i) + ".jpg";
         //        if (decoder.saveRGBFrameToJPG(rgb_frame, save_path)) {
-        //            std::cout << "第" << i+1 << "帧已保存至：" << save_path << std::endl;
+        //            std::cout << "第" << i << "帧已保存至：" << save_path << std::endl;
         //        } else {
         //            std::cerr << "保存失败：" << decoder.getErrorMsg() << std::endl;
         //        }
         
         auto resize_start = std::chrono::high_resolution_clock::now();
         if (!decoder.resizeRGBFrameWithBlank(rgb_frame, resize_frame)) {
-            std::cerr << "第" << i+1 << "帧缩放失败：" << decoder.getErrorMsg() << std::endl;
+            std::cerr << "第" << i << "帧缩放失败：" << decoder.getErrorMsg() << std::endl;
             continue;
         }
         auto resize_end = std::chrono::high_resolution_clock::now();
@@ -334,7 +336,7 @@ void testLocalFile(string& file_path) {
         
         auto normalize_start = std::chrono::high_resolution_clock::now();
         if (!decoder.normalizeRGBFrame(resize_frame, model_input, mean, std)) {
-            std::cerr << "第" << i+1 << "帧归一化失败：" << decoder.getErrorMsg() << std::endl;
+            std::cerr << "第" << i << "帧归一化失败：" << decoder.getErrorMsg() << std::endl;
             continue;
         }
         auto normalize_end = std::chrono::high_resolution_clock::now();
@@ -359,7 +361,7 @@ void testLocalFile(string& file_path) {
                         );
         
         //打印AI推理结果
-        std::cout << "【第" << i+1 << "帧 AI结果】";
+        std::cout << "【第" << i << "帧 AI结果】";
         if (ai_result.is_valid) {
             std::cout << "类别：" << ai_result.class_name
             << " | 置信度：" << fixed << setprecision(2) << ai_result.confidence;
@@ -371,7 +373,7 @@ void testLocalFile(string& file_path) {
         // 强制延迟：保证每帧间隔≥33ms（匹配30FPS）
         auto end = std::chrono::high_resolution_clock::now();
         auto cost = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-        std::cout << "第" << i+1 << "帧：解码=" << decode_ms << "ms，转换=" << conver_ms << "ms，缩放=" << resize_ms << "ms，归一=" << normalize_ms << "ms，AI=" << ai_ms << "ms，总=" << cost << "ms" << std::endl;
+        std::cout << "第" << i << "帧：解码=" << decode_ms << "ms，转换=" << conver_ms << "ms，缩放=" << resize_ms << "ms，归一=" << normalize_ms << "ms，AI=" << ai_ms << "ms，总=" << cost << "ms" << std::endl;
     }
     ai_infer.destroy();
     delete[] model_input; // 释放缓冲区
@@ -411,8 +413,8 @@ void testCameraWith25FPS() {
 int main() {
     //    avformat_network_init();
     string file_path = "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/data/天鹅.mp4";
-        testLocalFile(file_path);
-//        testCamera();
+//        testLocalFile(file_path);
+        testCamera();
     
     //    testSingleFrameDecodeTime(file_path);
     //    avformat_network_deinit();
