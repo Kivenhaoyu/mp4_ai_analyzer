@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <iostream>
 #include <fstream>
+#include <thread>
 #include "ai_infer.h"
 
 //辅助函数： 获取 ONNX 模型的输入/输出节点名称（需要与模型匹配）
@@ -45,7 +46,7 @@ std::vector<std::string> load_imagenet_labels(const std::string& file_path) {
         std::cerr << "[ERROR] 无法打开标签文件: " << file_path << std::endl;
         return labels;  // 返回空向量
     }
-
+    
     std::string line;
     while (std::getline(file, line)) {
         labels.push_back(line);  // 每行一个类别，顺序对应ID 0~999
@@ -62,7 +63,9 @@ bool AIInfer::init(const std::string &model_path) {
         env_ = Ort::Env(ORT_LOGGING_LEVEL_WARNING, "MobileNetV2_Infer");
         // 配置会话选项（启动优化选项，比如算子融合）
         session_options_ = Ort::SessionOptions();
-        session_options_.SetGraphOptimizationLevel(ORT_ENABLE_BASIC);
+        session_options_.SetGraphOptimizationLevel(ORT_ENABLE_ALL); // 启用算子融合、常量折叠等
+        session_options_.SetIntraOpNumThreads(std::thread::hardware_concurrency()); // 自动获取核心数
+        session_options_.SetInterOpNumThreads(2); // 跨算子并行线程数
         
         // 加载 ONNX 模型（创建会话）
         session_ = std::make_unique<Ort::Session>(env_,model_path.c_str(),session_options_);
@@ -73,12 +76,12 @@ bool AIInfer::init(const std::string &model_path) {
         std::cout << "ONNX模型加载成功，输入节点：" << input_names_[0]
         << "，输出节点：" << output_names_[0] << "\n" << std::endl;
         
-//        imagenet_labels_ = load_imagenet_labels(
-//            "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/imagenet_labels_chinese.txt"
-//        );
+        //        imagenet_labels_ = load_imagenet_labels(
+        //            "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/imagenet_labels_chinese.txt"
+        //        );
         imagenet_labels_ = load_imagenet_labels(
-            "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/imagenet_labels.txt"
-        );
+                                                "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/imagenet_labels.txt"
+                                                );
         return true;
         
     } catch (const Ort::Exception& e) {

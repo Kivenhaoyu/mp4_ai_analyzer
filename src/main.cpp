@@ -18,64 +18,9 @@
 #include "frame_guard.h"
 #include "ai_infer.h"
 #include "cv_renderer.h"
+#include "safe_queue.h"
+#include "data_struct.h"
 using namespace std;
-
-
-void testSingleFrameDecodeTime(const std::string& file_path, int test_frame_count = 100) {
-    FFmpegDecoder decoder;
-    if (!decoder.openWithLocalFile(file_path)) {
-        cout << decoder.getErrorMsg() << endl;
-    }else {
-        std::cout << "[耗时测试] 视频信息：宽=" << decoder.getVideoWidth()
-        << "，高=" << decoder.getVideoHeight()
-        << "，编码格式=" << decoder.getVideoCodecName() << std::endl;
-    }
-    
-    AVFrame* yuv_frame = av_frame_alloc();
-    if(!yuv_frame) {
-        std::cerr << "[耗时测试] YUV帧内存分配失败" << std::endl;
-        decoder.close();
-        return;
-    }
-    
-    
-    std::cout << "[耗时测试] 正在预热（跳过前10帧）..." << std::endl;
-    for (int i = 0; i < 10; i++) {
-        if(!decoder.getFrame(yuv_frame)){
-            std::cerr << "[耗时测试] 预热帧解码失败，测试终止" << std::endl;
-            decoder.close();
-            return;
-        }
-    }
-    
-    // 开始计算耗时
-    std::cout << "[耗时测试] 开始统计" << test_frame_count << "帧解码耗时..." << std::endl;
-    auto start_time = chrono::high_resolution_clock::now();
-    int succeed_count = 0;
-    for (int i = 0; i < test_frame_count; i++) {
-        if(!decoder.getFrame(yuv_frame)){
-            std::cerr << "[耗时测试] 第" << i + 1 << "帧解码失败，跳过" << std::endl;
-        }else {
-            succeed_count++;
-        }
-    }
-    auto end_time = chrono::high_resolution_clock::now();
-    
-    double total_ms = chrono::duration<double,milli>(end_time - start_time).count();
-    double avg_ms_per_frame = total_ms / succeed_count;
-    
-    std::cout << "\n==================================== 耗时测试结果 ====================================" << std::endl;
-    std::cout << "成功解码帧数：" << succeed_count << "/" << test_frame_count << std::endl;
-    std::cout << "总耗时：      " << std::fixed << std::setprecision(2) << total_ms << " 毫秒" << std::endl;
-    std::cout << "单帧平均耗时：" << std::fixed << std::setprecision(2) << avg_ms_per_frame << " 毫秒" << std::endl;
-    std::cout << "是否达标（<10ms/帧）：" << (avg_ms_per_frame < 10 ? "✅ 是" : "❌ 否") << std::endl;
-    std::cout << "======================================================================================" << std::endl;
-    
-    // 6. 释放资源（避免内存泄漏，复用你已有的close逻辑）
-    av_frame_free(&yuv_frame);
-    decoder.close();
-    
-}
 
 void testCamera() {
     FFmpegDecoder decoder;
@@ -409,15 +354,117 @@ void testCameraWith25FPS() {
     decoder.close();
 }
 
+// 测试阻塞模式（确保所有数据不丢失）
+void testBlockPolicy() {
+    std::cout << "\n===== 测试阻塞模式（不丢数据） =====" << std::endl;
+    SafeQueue<int> q(QueuePolicy::BLOCK_WHEN_FULL, 50); // 最大容量50，满时阻塞
+    std::atomic<bool> running(true);
+    const int total = 1000; // 总数据量
+
+    // 生产者：推送0-999（速度较快）
+    std::thread producer([&]() {
+        for (int i = 0; i < total && running; ++i) {
+            q.push(i);
+            // 生产者每100微秒推1个（速度快于消费者）
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+        running = false;
+        std::cout << "阻塞模式-生产者结束" << std::endl;
+    });
+
+    // 消费者：处理数据（速度较慢）
+    std::thread consumer([&]() {
+        int val;
+        int expected = 0;
+        while (true) {
+            bool has_data = q.pop(val, 200); // 超时200ms
+            if (has_data) {
+                if (val != expected) {
+                    std::cerr << "阻塞模式-数据错误：预期" << expected << "，实际" << val << std::endl;
+                } else {
+                    // 每100个打印一次（减少输出量）
+                    if (expected % 100 == 0) {
+                        std::cout << "阻塞模式-处理到：" << expected << std::endl;
+                    }
+                }
+                expected++;
+            } else {
+                // 退出条件：生产者停止且队列空
+                if (!running && q.size() == 0) {
+                    break;
+                }
+            }
+        }
+        std::cout << "阻塞模式-消费者结束，共处理" << expected << "个数据（应等于1000）" << std::endl;
+    });
+
+    producer.join();
+    consumer.join();
+}
+
+// 测试丢弃模式（允许丢旧数据，只保留最新的）
+void testDropPolicy() {
+    std::cout << "\n===== 测试丢弃模式（丢旧数据） =====" << std::endl;
+    SafeQueue<int> q(QueuePolicy::DROP_OLD_WHEN_FULL, 5); // 最大容量50，满时丢旧数据
+    std::atomic<bool> running(true);
+    const int total = 1000; // 总数据量
+
+    // 生产者：推送0-999（速度远快于消费者）
+    std::thread producer([&]() {
+        for (int i = 0; i < total && running; ++i) {
+            q.push(i);
+            // 生产者每10微秒推1个（极快，确保队列满）
+            std::this_thread::sleep_for(std::chrono::microseconds(10));
+        }
+        running = false;
+        std::cout << "丢弃模式-生产者结束" << std::endl;
+    });
+
+    // 消费者：处理数据（速度较慢）
+    std::thread consumer([&]() {
+        int val;
+        int last_val = -1; // 记录最后处理的值（应逐渐增大）
+        int count = 0;     // 处理总数
+
+        while (true) {
+            bool has_data = q.pop(val, 200);
+            if (has_data) {
+                count++;
+                // 验证数据是递增的（丢弃旧数据后，剩余数据应连续）
+                if (val <= last_val) {
+                    std::cerr << "丢弃模式-数据错误：当前" << val << "，上一个" << last_val << std::endl;
+                }
+                last_val = val;
+                // 每10个打印一次
+                if (count % 10 == 0) {
+                    std::cout << "丢弃模式-处理到第：" << val << "（累计" << count << "个）" << std::endl;
+                }
+            } else {
+                if (!running && q.size() == 0) {
+                    break;
+                }
+            }
+        }
+
+        // 最终处理的应是最后50个数据（950-999）
+        std::cout << "丢弃模式-消费者结束，共处理" << count << "个数据（缓存约50个），最后值：" << last_val << std::endl;
+    });
+
+    producer.join();
+    consumer.join();
+}
 
 int main() {
+    
+//    // 先测试阻塞模式（确保完整接收）
+//    testBlockPolicy();
+//    // 再测试丢弃模式（允许丢旧数据）
+//    testDropPolicy();
+
     //    avformat_network_init();
     string file_path = "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/data/天鹅.mp4";
-//        testLocalFile(file_path);
-        testCamera();
-    
-    //    testSingleFrameDecodeTime(file_path);
-    //    avformat_network_deinit();
+        testLocalFile(file_path);
+//        testCamera();
     
     return 0;
 }

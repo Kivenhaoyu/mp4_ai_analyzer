@@ -7,37 +7,19 @@
 
 
 #include "decoder.h"
+#include <thread>
 #include <opencv2/opencv.hpp>
 
 cv::Mat cropBlackEdges(const cv::Mat& bgr_mat) {
     if (bgr_mat.empty()) return bgr_mat;
-    
-    // 1. 转换为灰度图，便于检测黑边（黑边的灰度值接近0）
     cv::Mat gray_mat;
     cv::cvtColor(bgr_mat, gray_mat, cv::COLOR_BGR2GRAY);
-    
-    // 2. 阈值化：将接近黑色（<10）的区域视为黑边
-    cv::Mat thresh_mat;
-    cv::threshold(gray_mat, thresh_mat, 10, 255, cv::THRESH_BINARY); // 非黑边区域为255（白）
-    
-    // 3. 找到非黑边区域的边界
-    int top = 0, bottom = thresh_mat.rows - 1;
-    int left = 0, right = thresh_mat.cols - 1;
-    
-    // 找顶部边界（第一个非黑边行）
-    while (top <= bottom && cv::countNonZero(thresh_mat.row(top)) == 0) top++;
-    // 找底部边界（最后一个非黑边行）
-    while (bottom >= top && cv::countNonZero(thresh_mat.row(bottom)) == 0) bottom--;
-    // 找左侧边界（第一个非黑边列）
-    while (left <= right && cv::countNonZero(thresh_mat.col(left)) == 0) left++;
-    // 找右侧边界（最后一个非黑边列）
-    while (right >= left && cv::countNonZero(thresh_mat.col(right)) == 0) right--;
-    
-    // 4. 裁剪：如果所有区域都是黑边，则返回原图
-    if (top > bottom || left > right) {
-        return bgr_mat;
-    }
-    return bgr_mat(cv::Rect(left, top, right - left + 1, bottom - top + 1));
+    // 直接获取非黑边掩码（阈值>10的区域）
+    cv::Mat mask = gray_mat > 10;
+    // 找到掩码中非零区域的边界
+    cv::Rect roi = cv::boundingRect(mask);
+    if (roi.empty()) return bgr_mat;
+    return bgr_mat(roi);
 }
 
 FFmpegDecoder::FFmpegDecoder() : packet_(av_packet_alloc(),[](AVPacket *pkt){
@@ -108,22 +90,46 @@ bool FFmpegDecoder::openWithLocalFile(const std::string& file_path) {
         return false;
     }
     
+    // 打开解码器前添加（需要FFmpeg编译时支持对应硬件加速）
+    AVDictionary* options = nullptr; // 用于存储解码器选项
+#ifdef __APPLE__
+    av_dict_set(&options, "hwaccel", "videotoolbox", 0);    // macOS硬件加速
+#elif _WIN32
+    av_dict_set(&options, "hwaccel", "d3d11va", 0);         // Windows硬件加速
+#elif __linux__
+    av_dict_set(&options, "hwaccel", "vaapi", 0);           // Linux 启用 VAAPI 硬件加速（需系统支持）
+#endif
+    
     // 打开解码器（最终准备就绪，可以开始解码）
-    ret = avcodec_open2(codec_ctx_, codec_, nullptr);
+    ret = avcodec_open2(codec_ctx_, codec_, &options);
+    av_dict_free(&options);
     if (ret < 0) {
-        error_msg_ = "打开解码器失败：" + std::string(av_err2str(ret));
-        close();
-        return false;
+        error_msg_ = "硬件加速解码失败，尝试软件解码：" + std::string(av_err2str(ret));
+            // 重试：不传入硬件加速参数
+            ret = avcodec_open2(codec_ctx_, codec_, nullptr);
+            if (ret < 0) {
+                error_msg_ = "软件解码也失败：" + std::string(av_err2str(ret));
+                close();
+                return false;
+            }
+    }
+    // 打开解码器前设置线程数（建议为 CPU 核心数，避免过度并行）
+    codec_ctx_->thread_count = std::thread::hardware_concurrency();
+    codec_ctx_->thread_type = FF_THREAD_FRAME; // 按帧并行（适合视频）
+    // 打开解码器后检查是否使用硬件加速
+    if (codec_ctx_->hwaccel) {
+        std::cout << "硬件加速解码已启用：" << codec_ctx_->hwaccel->name << std::endl;
+    } else {
+        std::cout << "使用软件解码" << std::endl;
     }
     
     // 初始化 SwsContext
-    sws_ctx_ = sws_getContext(codec_ctx_->width, codec_ctx_->height, AV_PIX_FMT_YUV420P, codec_ctx_->width, codec_ctx_->height, AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr, nullptr);
+    sws_ctx_ = sws_getContext(codec_ctx_->width, codec_ctx_->height, AV_PIX_FMT_YUV420P, codec_ctx_->width, codec_ctx_->height, AV_PIX_FMT_RGB24, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
     if (!sws_ctx_) {
         error_msg_ = "SwsContext 初始化失败（YUV 转 RGB 上下文创建失败）";
         close();  // 初始化失败，释放已分配的资源
         return false;
     }
-    
     return true;
 }
 
@@ -143,7 +149,7 @@ bool FFmpegDecoder::openWithDevice(const std::string& camera_path, bool device_t
     
     const AVInputFormat * input_fmt = nullptr;
     // 新增：设置摄像头参数（分辨率、帧率）
-    AVDictionary* options = nullptr;
+     AVDictionary* device_options = nullptr;
     if (device_type) {
 #ifdef  __linux__
         input_fmt = av_find_input_format("v4l2"); //Linux 摄像头
@@ -160,14 +166,14 @@ bool FFmpegDecoder::openWithDevice(const std::string& camera_path, bool device_t
             return false;
         }
         
-        av_dict_set(&options, "video_size", "1280x720", 0);  // 分辨率（必须是支持的，如640x480或1280x720）
-        av_dict_set(&options, "framerate", "30", 0);         // 帧率（30，匹配支持的30.000030）
-        av_dict_set(&options, "pixel_format", "uyvy422", 0); // 新增像素格式参数
+        av_dict_set(&device_options, "video_size", "1280x720", 0);  // 分辨率（必须是支持的，如640x480或1280x720）
+        av_dict_set(&device_options, "framerate", "30", 0);         // 帧率（30，匹配支持的30.000030）
+        av_dict_set(&device_options, "pixel_format", "uyvy422", 0); // 新增像素格式参数
     }
     
     // 打开文件/摄像头（设备模式需传入input_fmt）
-    int ret = avformat_open_input(&format_ctx_, camera_path.c_str(), input_fmt, &options);
-    av_dict_free(&options);
+    int ret = avformat_open_input(&format_ctx_, camera_path.c_str(), input_fmt, &device_options);
+    av_dict_free(&device_options);
     if (ret != 0) {
         error_msg_ = saveError(ret, "打开摄像头失败：");
         return false;
@@ -192,6 +198,15 @@ bool FFmpegDecoder::openWithDevice(const std::string& camera_path, bool device_t
         close();
         return false;
     }
+    
+    // 打开解码器前添加（需要FFmpeg编译时支持对应硬件加速）
+    AVDictionary* codec_options = nullptr;
+#ifdef __APPLE__
+    av_dict_set(&codec_options, "hwaccel", "videotoolbox", 0); // macOS硬件加速
+#elif _WIN32
+    av_dict_set(&codec_options, "hwaccel", "d3d11va", 0); // Windows硬件加速
+#endif
+    
     // 根据视频流参数，查找对应的解码器
     AVCodecParameters* codec_par = format_ctx_->streams[video_stream_index_]->codecpar;
     codec_ = avcodec_find_decoder(codec_par->codec_id);
@@ -216,15 +231,21 @@ bool FFmpegDecoder::openWithDevice(const std::string& camera_path, bool device_t
     
     // 打开解码器（最终准备就绪，可以开始解码）
     codec_ctx_->thread_count = 1; // 实时场景单线程更稳定
-    ret = avcodec_open2(codec_ctx_, codec_, nullptr);
+    ret = avcodec_open2(codec_ctx_, codec_, &codec_options);
+    av_dict_free(&codec_options);
     if (ret < 0) {
-        error_msg_ = "打开解码器失败：" + std::string(av_err2str(ret));
-        close();
-        return false;
+        error_msg_ = "硬件加速解码失败，尝试软件解码：" + std::string(av_err2str(ret));
+            // 重试：不传入硬件加速参数
+            ret = avcodec_open2(codec_ctx_, codec_, nullptr);
+            if (ret < 0) {
+                error_msg_ = "软件解码也失败：" + std::string(av_err2str(ret));
+                close();
+                return false;
+            }
     }
     
     // 初始化 SwsContext
-    sws_ctx_ = sws_getContext(codec_ctx_->width, codec_ctx_->height, AV_PIX_FMT_UYVY422, codec_ctx_->width, codec_ctx_->height, AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr, nullptr);
+    sws_ctx_ = sws_getContext(codec_ctx_->width, codec_ctx_->height, AV_PIX_FMT_UYVY422, codec_ctx_->width, codec_ctx_->height, AV_PIX_FMT_RGB24, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
     if (!sws_ctx_) {
         error_msg_ = "SwsContext 初始化失败（YUV 转 RGB 上下文创建失败）";
         close();  // 初始化失败，释放已分配的资源
@@ -458,7 +479,7 @@ bool FFmpegDecoder::converUYUV422ToRgb(const AVFrame* yuv_frame, AVFrame*rgb_fra
         sws_ctx_ = sws_getContext(
                                   yuv_frame->width, yuv_frame->height, AV_PIX_FMT_UYVY422,
                                   rgb_frame->width, rgb_frame->height, AV_PIX_FMT_RGB24,
-                                  SWS_BILINEAR, nullptr, nullptr, nullptr
+                                  SWS_FAST_BILINEAR, nullptr, nullptr, nullptr
                                   );
         if (!sws_ctx_) {
             error_msg_ = "重建SwsContext失败";
