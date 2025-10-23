@@ -10,6 +10,85 @@
 #include <thread>
 #include <opencv2/opencv.hpp>
 
+/**
+ * 手动填充图像为黑色（替代av_image_fill_black，兼容旧版FFmpeg）
+ * @param data 图像数据指针（同AVFrame.data）
+ * @param linesize 每行字节数（同AVFrame.linesize）
+ * @param w 图像宽度
+ * @param h 图像高度
+ * @param pix_fmt 像素格式
+ */
+void fillBlack(uint8_t* data[4], const int linesize[4], int w, int h, AVPixelFormat pix_fmt) {
+    switch (pix_fmt) {
+        case AV_PIX_FMT_BGR24: {
+            // BGR24格式：黑色 = B=0, G=0, R=0（每个像素3字节）
+            for (int y = 0; y < h; y++) {
+                // 每行起始地址
+                uint8_t* row = data[0] + y * linesize[0];
+                // 填充一行：连续写入w个像素（每个3字节，值为0）
+                memset(row, 0, w * 3);
+                // 若linesize > w*3（内存对齐的填充部分），也填0（可选，不影响显示）
+                if (linesize[0] > w * 3) {
+                    memset(row + w * 3, 0, linesize[0] - w * 3);
+                }
+            }
+            break;
+        }
+        case AV_PIX_FMT_YUV420P: {
+            // YUV420P格式：黑色 = Y=0, U=128, V=128（YUV的中性值）
+            // 1. 填充Y平面（亮度）
+            for (int y = 0; y < h; y++) {
+                uint8_t* row = data[0] + y * linesize[0];
+                memset(row, 0, w); // Y=0
+                if (linesize[0] > w) {
+                    memset(row + w, 0, linesize[0] - w);
+                }
+            }
+            // 2. 填充U平面（色度，宽高为Y的1/2）
+            int u_w = w / 2;
+            int u_h = h / 2;
+            for (int y = 0; y < u_h; y++) {
+                uint8_t* row = data[1] + y * linesize[1];
+                memset(row, 128, u_w); // U=128
+                if (linesize[1] > u_w) {
+                    memset(row + u_w, 128, linesize[1] - u_w);
+                }
+            }
+            // 3. 填充V平面（同U）
+            for (int y = 0; y < u_h; y++) {
+                uint8_t* row = data[2] + y * linesize[2];
+                memset(row, 128, u_w); // V=128
+                if (linesize[2] > u_w) {
+                    memset(row + u_w, 128, linesize[2] - u_w);
+                }
+            }
+            break;
+        }
+        case AV_PIX_FMT_UYVY422: {
+            // UYVY422格式：黑色 = U=128, Y=0, V=128（每个像素2字节，按U-Y-V-Y排列）
+            for (int y = 0; y < h; y++) {
+                uint8_t* row = data[0] + y * linesize[0];
+                // 逐像素填充（每4字节对应2个Y像素）
+                for (int x = 0; x < w; x += 2) {
+                    row[x*2 + 0] = 128; // U
+                    row[x*2 + 1] = 0;   // Y0
+                    row[x*2 + 2] = 128; // V
+                    row[x*2 + 3] = 0;   // Y1
+                }
+                // 处理内存对齐的填充部分
+                int total_bytes = w * 2; // 理论总字节数
+                if (linesize[0] > total_bytes) {
+                    memset(row + total_bytes, 0, linesize[0] - total_bytes);
+                }
+            }
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+
 cv::Mat cropBlackEdges(const cv::Mat& bgr_mat) {
     if (bgr_mat.empty()) return bgr_mat;
     cv::Mat gray_mat;
@@ -91,42 +170,73 @@ bool FFmpegDecoder::openWithLocalFile(const std::string& file_path) {
     }
     
     // 打开解码器前添加（需要FFmpeg编译时支持对应硬件加速）
-    AVDictionary* options = nullptr; // 用于存储解码器选项
+    AVDictionary* codec_options = nullptr; // 用于存储解码器选项
+    AVBufferRef* hw_device_ctx = nullptr; // 硬件设备上下文
 #ifdef __APPLE__
-    av_dict_set(&options, "hwaccel", "videotoolbox", 0);    // macOS硬件加速
-#elif _WIN32
-    av_dict_set(&options, "hwaccel", "d3d11va", 0);         // Windows硬件加速
-#elif __linux__
-    av_dict_set(&options, "hwaccel", "vaapi", 0);           // Linux 启用 VAAPI 硬件加速（需系统支持）
-#endif
-    
-    // 打开解码器（最终准备就绪，可以开始解码）
-    ret = avcodec_open2(codec_ctx_, codec_, &options);
-    av_dict_free(&options);
+    ret = av_hwdevice_ctx_create(&hw_device_ctx, AV_HWDEVICE_TYPE_VIDEOTOOLBOX, nullptr, nullptr, 0);
     if (ret < 0) {
-        error_msg_ = "硬件加速解码失败，尝试软件解码：" + std::string(av_err2str(ret));
-            // 重试：不传入硬件加速参数
-            ret = avcodec_open2(codec_ctx_, codec_, nullptr);
-            if (ret < 0) {
-                error_msg_ = "软件解码也失败：" + std::string(av_err2str(ret));
-                close();
-                return false;
-            }
+        error_msg_ = "创建VideoToolbox硬件设备上下文失败：" +std::string(av_err2str(ret));
+        // 不终止，继续尝试软件解码
+    } else {
+        // 将硬件设备上下文关联到解码器
+        codec_ctx_->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+        av_dict_set(&codec_options, "hwaccel", "videotoolbox", 0);
     }
+#elif _WIN32
+    // Windows类似逻辑（d3d11va）
+    ret = av_hwdevice_ctx_create(&hw_device_ctx, AV_HWDEVICE_TYPE_D3D11VA, nullptr, nullptr, 0);
+    if (ret >= 0) {
+        codec_ctx_->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+        av_dict_set(&options, "hwaccel", "d3d11va", 0);
+    }
+#elif __linux__
+    // Linux VAAPI逻辑
+    ret = av_hwdevice_ctx_create(&hw_device_ctx, AV_HWDEVICE_TYPE_VAAPI, nullptr, nullptr, 0);
+    if (ret >= 0) {
+        codec_ctx_->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+        av_dict_set(&codec_options, "hwaccel", "vaapi", 0);
+    }
+#endif
     // 打开解码器前设置线程数（建议为 CPU 核心数，避免过度并行）
     codec_ctx_->thread_count = std::thread::hardware_concurrency();
     codec_ctx_->thread_type = FF_THREAD_FRAME; // 按帧并行（适合视频）
-    // 打开解码器后检查是否使用硬件加速
-    if (codec_ctx_->hwaccel) {
-        std::cout << "硬件加速解码已启用：" << codec_ctx_->hwaccel->name << std::endl;
+    
+    // 打开解码器（最终准备就绪，可以开始解码）
+    ret = avcodec_open2(codec_ctx_, codec_, &codec_options);
+    av_dict_free(&codec_options);
+    // 4. 释放硬件设备上下文（已通过av_buffer_ref关联到codec_ctx_，此处仅释放原始引用）
+    if (hw_device_ctx) {
+        av_buffer_unref(&hw_device_ctx);
+    }
+    
+    // 5. 硬件加速失败时重试软件解码
+    if (ret < 0) {
+        error_msg_ = "硬件加速解码失败，尝试软件解码：" + std::string(av_err2str(ret));
+        // 重置解码器上下文的硬件相关参数（避免影响软件解码）
+        if (codec_ctx_->hw_device_ctx) {
+            av_buffer_unref(&codec_ctx_->hw_device_ctx);
+            codec_ctx_->hw_device_ctx = nullptr;
+        }
+        // 重试软件解码
+        ret = avcodec_open2(codec_ctx_, codec_, nullptr);
+        if (ret < 0) {
+            error_msg_ = "软件解码也失败：" + std::string(av_err2str(ret));
+            close();
+            return false;
+        }
+    }
+    
+    // 6. 验证硬件加速是否生效（更准确的判断方式）
+    if (codec_ctx_->hwaccel || codec_ctx_->hw_device_ctx) {
+        std::cout << "硬件加速解码已启用（类型：" << (codec_ctx_->hwaccel ? codec_ctx_->hwaccel->name : "videotoolbox") << "）" << std::endl;
     } else {
         std::cout << "使用软件解码" << std::endl;
     }
     
     // 初始化 SwsContext
-    sws_ctx_ = sws_getContext(codec_ctx_->width, codec_ctx_->height, AV_PIX_FMT_YUV420P, codec_ctx_->width, codec_ctx_->height, AV_PIX_FMT_RGB24, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+    sws_ctx_ = sws_getContext(codec_ctx_->width, codec_ctx_->height, AV_PIX_FMT_YUV420P, codec_ctx_->width, codec_ctx_->height, AV_PIX_FMT_BGR24, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
     if (!sws_ctx_) {
-        error_msg_ = "SwsContext 初始化失败（YUV 转 RGB 上下文创建失败）";
+        error_msg_ = "SwsContext 初始化失败（YUV 转 BGR 上下文创建失败）";
         close();  // 初始化失败，释放已分配的资源
         return false;
     }
@@ -149,7 +259,7 @@ bool FFmpegDecoder::openWithDevice(const std::string& camera_path, bool device_t
     
     const AVInputFormat * input_fmt = nullptr;
     // 新增：设置摄像头参数（分辨率、帧率）
-     AVDictionary* device_options = nullptr;
+    AVDictionary* device_options = nullptr;
     if (device_type) {
 #ifdef  __linux__
         input_fmt = av_find_input_format("v4l2"); //Linux 摄像头
@@ -199,14 +309,6 @@ bool FFmpegDecoder::openWithDevice(const std::string& camera_path, bool device_t
         return false;
     }
     
-    // 打开解码器前添加（需要FFmpeg编译时支持对应硬件加速）
-    AVDictionary* codec_options = nullptr;
-#ifdef __APPLE__
-    av_dict_set(&codec_options, "hwaccel", "videotoolbox", 0); // macOS硬件加速
-#elif _WIN32
-    av_dict_set(&codec_options, "hwaccel", "d3d11va", 0); // Windows硬件加速
-#endif
-    
     // 根据视频流参数，查找对应的解码器
     AVCodecParameters* codec_par = format_ctx_->streams[video_stream_index_]->codecpar;
     codec_ = avcodec_find_decoder(codec_par->codec_id);
@@ -228,26 +330,75 @@ bool FFmpegDecoder::openWithDevice(const std::string& camera_path, bool device_t
         close();
         return false;
     }
-    
+    // 打开解码器前添加（需要FFmpeg编译时支持对应硬件加速）
+    AVDictionary* codec_options = nullptr; // 用于存储解码器选项
+    AVBufferRef* hw_device_ctx = nullptr; // 硬件设备上下文
+#ifdef __APPLE__
+    ret = av_hwdevice_ctx_create(&hw_device_ctx, AV_HWDEVICE_TYPE_VIDEOTOOLBOX, nullptr, nullptr, 0);
+    if (ret < 0) {
+        error_msg_ = "创建VideoToolbox硬件设备上下文失败：" +std::string(av_err2str(ret));
+        // 不终止，继续尝试软件解码
+    } else {
+        // 将硬件设备上下文关联到解码器
+        codec_ctx_->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+        av_dict_set(&codec_options, "hwaccel", "videotoolbox", 0);
+    }
+#elif _WIN32
+    // Windows类似逻辑（d3d11va）
+    ret = av_hwdevice_ctx_create(&hw_device_ctx, AV_HWDEVICE_TYPE_D3D11VA, nullptr, nullptr, 0);
+    if (ret >= 0) {
+        codec_ctx_->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+        av_dict_set(&options, "hwaccel", "d3d11va", 0);
+    }
+#elif __linux__
+    // Linux VAAPI逻辑
+    ret = av_hwdevice_ctx_create(&hw_device_ctx, AV_HWDEVICE_TYPE_VAAPI, nullptr, nullptr, 0);
+    if (ret >= 0) {
+        codec_ctx_->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+        av_dict_set(&codec_options, "hwaccel", "vaapi", 0);
+    }
+#endif
+    // 打开解码器前设置线程数（建议为 CPU 核心数，避免过度并行）
+    codec_ctx_->thread_count = std::thread::hardware_concurrency();
+    codec_ctx_->thread_type = FF_THREAD_FRAME; // 按帧并行（适合视频）
     // 打开解码器（最终准备就绪，可以开始解码）
     codec_ctx_->thread_count = 1; // 实时场景单线程更稳定
+    // 打开解码器（最终准备就绪，可以开始解码）
     ret = avcodec_open2(codec_ctx_, codec_, &codec_options);
     av_dict_free(&codec_options);
+    // 4. 释放硬件设备上下文（已通过av_buffer_ref关联到codec_ctx_，此处仅释放原始引用）
+    if (hw_device_ctx) {
+        av_buffer_unref(&hw_device_ctx);
+    }
+    
+    // 5. 硬件加速失败时重试软件解码
     if (ret < 0) {
         error_msg_ = "硬件加速解码失败，尝试软件解码：" + std::string(av_err2str(ret));
-            // 重试：不传入硬件加速参数
-            ret = avcodec_open2(codec_ctx_, codec_, nullptr);
-            if (ret < 0) {
-                error_msg_ = "软件解码也失败：" + std::string(av_err2str(ret));
-                close();
-                return false;
-            }
+        // 重置解码器上下文的硬件相关参数（避免影响软件解码）
+        if (codec_ctx_->hw_device_ctx) {
+            av_buffer_unref(&codec_ctx_->hw_device_ctx);
+            codec_ctx_->hw_device_ctx = nullptr;
+        }
+        // 重试软件解码
+        ret = avcodec_open2(codec_ctx_, codec_, nullptr);
+        if (ret < 0) {
+            error_msg_ = "软件解码也失败：" + std::string(av_err2str(ret));
+            close();
+            return false;
+        }
+    }
+    
+    // 6. 验证硬件加速是否生效（更准确的判断方式）
+    if (codec_ctx_->hwaccel || codec_ctx_->hw_device_ctx) {
+        std::cout << "硬件加速解码已启用（类型：" << (codec_ctx_->hwaccel ? codec_ctx_->hwaccel->name : "videotoolbox") << "）" << std::endl;
+    } else {
+        std::cout << "使用软件解码" << std::endl;
     }
     
     // 初始化 SwsContext
-    sws_ctx_ = sws_getContext(codec_ctx_->width, codec_ctx_->height, AV_PIX_FMT_UYVY422, codec_ctx_->width, codec_ctx_->height, AV_PIX_FMT_RGB24, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+    sws_ctx_ = sws_getContext(codec_ctx_->width, codec_ctx_->height, AV_PIX_FMT_UYVY422, codec_ctx_->width, codec_ctx_->height, AV_PIX_FMT_BGR24, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
     if (!sws_ctx_) {
-        error_msg_ = "SwsContext 初始化失败（YUV 转 RGB 上下文创建失败）";
+        error_msg_ = "SwsContext 初始化失败（YUV 转 BGR 上下文创建失败）";
         close();  // 初始化失败，释放已分配的资源
         return false;
     }
@@ -264,6 +415,9 @@ void FFmpegDecoder::close() {
     }
     
     if (codec_ctx_) {
+        if (codec_ctx_->hw_device_ctx) {
+            av_buffer_unref(&codec_ctx_->hw_device_ctx);
+        }
         avcodec_close(codec_ctx_);
         avcodec_free_context(&codec_ctx_);
         codec_ctx_ = nullptr;
@@ -377,322 +531,124 @@ std::string FFmpegDecoder::getVideoCodecName() {
     return avcodec_get_name(codec_par->codec_id);
 }
 
-bool FFmpegDecoder::convertYuvToRgb(const AVFrame* yuv_frame, AVFrame* rgb_frame) {
-    // 1. 检查参数有效性（避免空指针/无效上下文）
-    if (!sws_ctx_ || !yuv_frame || !rgb_frame) {
-        error_msg_ = "YUV 转 RGB 失败：参数无效（上下文/帧为空）";
+/**
+ * 一步完成：YUV→BGR格式转换 + 裁剪/黑边/拉伸 + 缩放
+ * @param src_yuv 输入YUV帧（支持YUV420P、UYVY422）
+ * @param dst_bgr 输出BGR帧（AV_PIX_FMT_BGR24）
+ * @param dst_w 目标宽度（如224）
+ * @param dst_h 目标高度（如224）
+ * @param mode 缩放模式（STRETCH/KEEP_BLACK/CROP）
+ * @return 成功返回true
+ */
+bool FFmpegDecoder::convertCropResizeYuvToBgr(const AVFrame* src_yuv, AVFrame* bgr_frame,
+                                              int dst_w, int dst_h, ResizeMode mode) {
+    // 1. 入参校验
+    if (!src_yuv || !bgr_frame) {
+        error_msg_ = "处理失败：输入/输出帧为空";
         return false;
     }
-    // 2. 检查输入格式是否为 YUV420P（双重确认，避免异常情况）
-    if (yuv_frame->format != AV_PIX_FMT_YUV420P) {
-        error_msg_ = "YUV 转 RGB 失败：输入格式不是 YUV420P（实际格式：" + std::to_string(yuv_frame->format) + "）";
+    AVPixelFormat src_fmt = static_cast<AVPixelFormat>(src_yuv->format);
+    if (src_fmt != AV_PIX_FMT_YUV420P && src_fmt != AV_PIX_FMT_UYVY422) {
+        error_msg_ = "暂不支持的YUV格式（仅支持YUV420P和UYVY422）";
+        return false;
+    }
+    if (dst_w <= 0 || dst_h <= 0) {
+        error_msg_ = "目标尺寸无效（宽=" + std::to_string(dst_w) + ", 高=" + std::to_string(dst_h) + "）";
         return false;
     }
     
-    // 关键：检查并分配 rgb_frame 的缓冲区（若未分配）
-    if (rgb_frame->width != yuv_frame->width ||
-        rgb_frame->height != yuv_frame->height ||
-        rgb_frame->format != AV_PIX_FMT_RGB24) {
+    // 关键：检查并分配 bgr_frame 的缓冲区（若未分配）
+    if (bgr_frame->width != dst_w ||
+        bgr_frame->height != dst_h ||
+        bgr_frame->format != AV_PIX_FMT_BGR24) {
         // 尺寸/格式不匹配，先释放旧缓冲区
-        av_frame_unref(rgb_frame);
+        av_frame_unref(bgr_frame);
         // 设置新的宽高和格式
-        rgb_frame->width = yuv_frame->width;
-        rgb_frame->height = yuv_frame->height;
-        rgb_frame->format = AV_PIX_FMT_RGB24;
+        bgr_frame->width = dst_w;//yuv_frame->width;
+        bgr_frame->height =dst_h;//yuv_frame->height;
+        bgr_frame->format = AV_PIX_FMT_BGR24;
         // 分配缓冲区（32字节对齐，兼容多数硬件）
-        if (av_frame_get_buffer(rgb_frame, 32) < 0) {
-            error_msg_ = "YUV422p 转 RGB 失败：RGB帧缓冲区分配失败";
+        if (av_frame_get_buffer(bgr_frame, 32) < 0) {
+            error_msg_ = "YUV422p 转 BGR 失败：RGB帧缓冲区分配失败";
             return false;
         }
     }
-    // 3. 执行格式转换（FFmpeg 核心接口 sws_scale）
-    int converted_lines = sws_scale(
-                                    sws_ctx_,                  // 格式转换上下文
-                                    yuv_frame->data,           // 输入 YUV 数据（Y/U/V 三个平面）
-                                    yuv_frame->linesize,       // 输入 YUV 行对齐（避免图像拉伸）
-                                    0,                         // 从第 0 行开始转换
-                                    yuv_frame->height,         // 转换的行数（整个帧的高度）
-                                    rgb_frame->data,           // 输出 RGB 数据（单平面，RGB 按字节排列）
-                                    rgb_frame->linesize        // 输出 RGB 行对齐
-                                    );
-    // 4. 检查转换结果（converted_lines 应等于帧高度，否则转换不完整）
-    if (converted_lines != yuv_frame->height) {
-        error_msg_ = "YUV 转 RGB 失败：转换行数不完整（实际：" + std::to_string(converted_lines) + "，预期：" + std::to_string(yuv_frame->height) + "）";
+    
+    // 创建缩放上下文
+    SwsContext* sws_ctx = sws_getContext(
+                                         src_yuv->width, src_yuv->height, static_cast<AVPixelFormat>(src_yuv->format),  // 源参数：宽、高、格式
+        dst_w, dst_h, AV_PIX_FMT_BGR24,    // 目标参数：宽、高、格式
+        SWS_BILINEAR,                      // 缩放算法（双线性插值，平衡速度和质量）
+        nullptr, nullptr, nullptr          // 滤波器参数（默认nullptr即可）
+    );
+
+    if (!sws_ctx) {
+        std::cerr << "创建缩放上下文失败" << std::endl;
         return false;
     }
-    // 转换成功
+    
+    // 执行缩放（同时转换格式）
+    int ret = sws_scale(
+        sws_ctx,                  // 缩放上下文
+        src_yuv->data,            // 源数据指针（YUV420P的3个平面）
+        src_yuv->linesize,        // 源每行字节数（linesize，含对齐填充）
+        0,                        // 从源图像第0行开始处理
+                        src_yuv->height,                    // 处理的源图像行数（整个源图像高度）
+        bgr_frame->data,            // 目标数据指针（BGR24的单平面）
+                        bgr_frame->linesize         // 目标每行字节数（linesize）
+    );
+
+    // 检查缩放结果：返回值应为目标高度（dst_h），否则缩放失败
+    if (ret != dst_h) {
+        std::cerr << "缩放失败（实际处理行数：" << ret << "，预期：" << dst_h << "）" << std::endl;
+        sws_freeContext(sws_ctx);
+        return false;
+    }
+
     return true;
 }
 
-bool FFmpegDecoder::converUYUV422ToRgb(const AVFrame* yuv_frame, AVFrame*rgb_frame) {
-    // 1. 检查参数有效性（避免空指针/无效上下文）
-    if (!sws_ctx_ || !yuv_frame || !rgb_frame) {
-        error_msg_ = "UYUV422 转 RGB 失败：参数无效（上下文/帧为空）";
-        return false;
-    }
-    // 2. 检查输入格式是否为 UYUV422（双重确认，避免异常情况）
-    if (yuv_frame->format != AV_PIX_FMT_UYVY422) {
-        error_msg_ = "UYVY422 转 RGB 失败：输入格式不是 UYVY422（实际格式：" + std::to_string(yuv_frame->format) + "）";
-        return false;
-    }
-    
-    // 关键：检查并分配 rgb_frame 的缓冲区（若未分配）
-    if (rgb_frame->width != yuv_frame->width ||
-        rgb_frame->height != yuv_frame->height ||
-        rgb_frame->format != AV_PIX_FMT_RGB24) {
-        // 尺寸/格式不匹配，先释放旧缓冲区
-        av_frame_unref(rgb_frame);
-        // 设置新的宽高和格式
-        rgb_frame->width = yuv_frame->width;
-        rgb_frame->height = yuv_frame->height;
-        rgb_frame->format = AV_PIX_FMT_RGB24;
-        // 分配缓冲区（32字节对齐，兼容多数硬件）
-        if (av_frame_get_buffer(rgb_frame, 32) < 0) {
-            error_msg_ = "UYVY422 转 RGB 失败：RGB帧缓冲区分配失败";
-            return false;
-        }
-    }
-    
-    // 4. 确保缓冲区可写（避免只读内存导致的错误）
-    if (av_frame_make_writable(rgb_frame) < 0) {
-        error_msg_ = "UYVY422 转 RGB 失败：RGB帧不可写";
-        return false;
-    }
-    // 3. 执行格式转换（FFmpeg 核心接口 sws_scale）
-    int converted_lines = sws_scale(
-                                    sws_ctx_,                  // 格式转换上下文
-                                    yuv_frame->data,           // 输入 YUV 数据（Y/U/V 三个平面）
-                                    yuv_frame->linesize,       // 输入 YUV 行对齐（避免图像拉伸）
-                                    0,                         // 从第 0 行开始转换
-                                    yuv_frame->height,         // 转换的行数（整个帧的高度）
-                                    rgb_frame->data,           // 输出 RGB 数据（单平面，RGB 按字节排列）
-                                    rgb_frame->linesize        // 输出 RGB 行对齐
-                                    );
-    // 4. 检查转换结果（converted_lines 应等于帧高度，否则转换不完整）
-    if (converted_lines != yuv_frame->height) {
-        error_msg_ = "UYVY422 转 RGB 失败：转换行数不完整（实际：" + std::to_string(converted_lines) + "，预期：" + std::to_string(yuv_frame->height) + "）";
-        
-        //销毁
-        sws_freeContext(sws_ctx_);
-        
-        // 用当前帧的宽高重建（兼容可能的动态尺寸变化）
-        sws_ctx_ = sws_getContext(
-                                  yuv_frame->width, yuv_frame->height, AV_PIX_FMT_UYVY422,
-                                  rgb_frame->width, rgb_frame->height, AV_PIX_FMT_RGB24,
-                                  SWS_FAST_BILINEAR, nullptr, nullptr, nullptr
-                                  );
-        if (!sws_ctx_) {
-            error_msg_ = "重建SwsContext失败";
-            return false;
-        }
-        
-        // 重试转换
-        converted_lines = sws_scale(
-                                    sws_ctx_,
-                                    yuv_frame->data,
-                                    yuv_frame->linesize,
-                                    0,
-                                    yuv_frame->height,
-                                    rgb_frame->data,
-                                    rgb_frame->linesize
-                                    );
-        if (converted_lines != yuv_frame->height) {
-            error_msg_ = "重试转换仍失败";
-            return false;
-        }
-    }
-    // 转换成功
-    return true;
-}
-
-bool FFmpegDecoder::saveRGBFrameToJPG(const AVFrame* rgb_frame, const std::string &save_path) {
-    if (!rgb_frame || save_path.empty()){
+bool FFmpegDecoder::saveBGRFrameToJPG(const AVFrame* bgr_frame, const std::string &save_path) {
+    if (!bgr_frame || save_path.empty()){
         error_msg_ = "保存JPG失败：RGB帧为空";
         return false;
     }
-    
-    if (rgb_frame->format != AV_PIX_FMT_RGB24) {
-        error_msg_ = "保存JPG失败：输入不是RGB24格式（实际格式：" + std::to_string(rgb_frame->format) + "）";
+
+    if (bgr_frame->format != AV_PIX_FMT_BGR24) {
+        error_msg_ = "保存JPG失败：输入不是BGR24格式（实际格式：" + std::to_string(bgr_frame->format) + "）";
         return false;
     }
-    if (rgb_frame->width <= 0 || rgb_frame->height <= 0) {
+    if (bgr_frame->width <= 0 || bgr_frame->height <= 0) {
         error_msg_ = "保存JPG失败：帧宽高无效";
         return false;
     }
     cv::Mat rgb_mat(
-                    rgb_frame->height,          // 图像高度
-                    rgb_frame->width,           // 图像宽度
+                    bgr_frame->height,          // 图像高度
+                    bgr_frame->width,           // 图像宽度
                     CV_8UC3,                    // 数据类型：8位无符号，3通道
-                    rgb_frame->data[0],         // 像素数据起始地址
-                    rgb_frame->linesize[0]);    // 每行数据的字节数（对齐用）
-    
+                    bgr_frame->data[0],         // 像素数据起始地址
+                    bgr_frame->linesize[0]);    // 每行数据的字节数（对齐用）
+
     cv::Mat bgr_mat;
     cv::cvtColor(rgb_mat, bgr_mat, cv::COLOR_RGB2BGR);
-    
+
     // 4. 保存为JPG（质量可选，0-100，越高质量越好）
     std::vector<int> jpg_params = {cv::IMWRITE_JPEG_QUALITY, 90};
     if (!cv::imwrite(save_path, bgr_mat, jpg_params)) {
         error_msg_ = "保存JPG失败：无法写入文件（路径：" + save_path + "）";
         return false;
     }
-    
+
     return true;
-    
+
 }
 
-bool FFmpegDecoder::resizeRGBFrameWithBlank(const AVFrame *src_rgb, AVFrame *dst_rgb, int dst_w, int dst_h){
-    // 1. 入参检验
-    if (!src_rgb || !dst_rgb) {
-        error_msg_ = "缩放失败：输入/输出帧为空！！！";
-        return false;
-    }
-    
-    if (src_rgb->format != AV_PIX_FMT_RGB24) {
-        error_msg_ = "缩放失败：输入帧不是RGB24格式（实际格式：" + std::to_string(src_rgb->format) + "）";
-        return false;
-    }
-    
-    cv::Mat src_mat(
-                    src_rgb->height,
-                    src_rgb->width,
-                    CV_8UC3,
-                    src_rgb->data[0],
-                    src_rgb->linesize[0]
-                    );
-    
-    // OpenCV默认处理BGR，需转换（避免颜色异常）
-    cv::Mat bgr_mat;
-    cv::cvtColor(src_mat, bgr_mat, cv::COLOR_RGB2BGR);
-    
-    // 3. 缩放：保持原图比例，边缘填充黑色（避免拉伸）
-    cv::Mat resized_bgr;
-    double scale = std::min((double)dst_w/bgr_mat.cols,(double)dst_h/bgr_mat.rows);
-    int new_w = bgr_mat.cols * scale;
-    int new_h = bgr_mat.rows * scale;
-    cv::resize(bgr_mat, resized_bgr, cv::Size(new_w, new_h), 0, 0, cv::INTER_LINEAR); // 线性插值，画质更优
-    
-    // 4. 填充到目标尺寸（居中放置，边缘补黑）
-    cv::Mat dst_bgr(dst_h,dst_w,CV_8UC3,cv::Scalar(0,0,0)); //黑色背景
-    cv::Rect roi((dst_w - new_w)/2,(dst_h - new_h) / 2, new_w, new_h); //居中 ROI
-    resized_bgr.copyTo(dst_bgr(roi));
-    
-    // 5. cv::Mat→AVFrame（RGB24格式）
-    // 确保输出帧缓冲区有效
-    if (dst_rgb->width != dst_w || dst_rgb->height != dst_h || dst_rgb->format != AV_PIX_FMT_RGB24) {
-        av_frame_unref(dst_rgb);
-        dst_rgb->width = dst_w;
-        dst_rgb->height = dst_h;
-        dst_rgb->format = AV_PIX_FMT_RGB24;
-        if (av_frame_get_buffer(dst_rgb, 32) < 0) {
-            error_msg_ = "缩放失败：输出帧缓冲区分配失败";
-            return false;
-        }
-    }
-    
-    // BGR→RGB，复制数据到AVFrame
-    cv::Mat dst_rgb_mat;
-    cv::cvtColor(dst_bgr, dst_rgb_mat, cv::COLOR_BGR2RGB);
-    for (int i = 0; i < dst_h; ++i) {
-        memcpy(
-               dst_rgb->data[0] + i * dst_rgb->linesize[0], // 目标行地址
-               dst_rgb_mat.data + i * dst_rgb_mat.step,      // 源行地址
-               dst_w * 3                                     // 每行字节数（RGB24：1像素3字节）
-               );
-    }
-    return true;
-}
-
-bool FFmpegDecoder::resizeRGBFrame(const AVFrame *src_rgb, AVFrame *dst_rgb, int dst_w, int dst_h){
-    // 1. 入参检验
-    if (!src_rgb || !dst_rgb) {
-        error_msg_ = "缩放失败：输入/输出帧为空！！！";
-        return false;
-    }
-    
-    if (src_rgb->format != AV_PIX_FMT_RGB24) {
-        error_msg_ = "缩放失败：输入帧不是RGB24格式（实际格式：" + std::to_string(src_rgb->format) + "）";
-        return false;
-    }
-    
-    cv::Mat src_mat(
-                    src_rgb->height,
-                    src_rgb->width,
-                    CV_8UC3,
-                    src_rgb->data[0],
-                    src_rgb->linesize[0]
-                    );
-    
-    // OpenCV默认处理BGR，需转换（避免颜色异常）
-    cv::Mat bgr_mat;
-    cv::cvtColor(src_mat, bgr_mat, cv::COLOR_RGB2BGR);
-    
-    // 先裁剪原始黑边
-    cv::Mat cropped_mat = cropBlackEdges(bgr_mat);
-    if (cropped_mat.empty()) {
-        error_msg_ = "裁剪黑边后图像为空";
-        return false;
-    }
-    
-    // 调整比例：裁剪至与目标尺寸相同的宽高比，避免填充黑边
-    int src_cropped_w = cropped_mat.cols;
-    int src_cropped_h = cropped_mat.rows;
-    double target_ratio = (double)dst_w / dst_h; // 目标比例（如224/224=1）
-    double src_ratio = (double)src_cropped_w / src_cropped_h;
-    
-    cv::Mat ratio_adjusted_mat;
-    if (src_ratio > target_ratio) {
-        // 原图更宽：裁剪左右两侧
-        int new_w = src_cropped_h * target_ratio;
-        int x = (src_cropped_w - new_w) / 2;
-        // 确保裁剪区域有效（避免x为负或new_w超出范围）
-        x = std::max(0, x);
-        new_w = std::min(new_w, src_cropped_w - x);
-        ratio_adjusted_mat = cropped_mat(cv::Rect(x, 0, new_w, src_cropped_h));
-    } else {
-        // 原图更高：裁剪上下两侧
-        int new_h = src_cropped_w / target_ratio;
-        int y = (src_cropped_h - new_h) / 2;
-        // 确保裁剪区域有效
-        y = std::max(0, y);
-        new_h = std::min(new_h, src_cropped_h - y);
-        ratio_adjusted_mat = cropped_mat(cv::Rect(0, y, src_cropped_w, new_h));
-    }
-    
-    // 直接缩放到目标尺寸（无填充，无黑边）
-    cv::Mat resized_bgr;
-    cv::resize(ratio_adjusted_mat, resized_bgr, cv::Size(dst_w, dst_h), 0, 0, cv::INTER_LINEAR);
-    
-    // 确保输出帧缓冲区有效
-    if (dst_rgb->width != dst_w || dst_rgb->height != dst_h || dst_rgb->format != AV_PIX_FMT_RGB24) {
-        av_frame_unref(dst_rgb);
-        dst_rgb->width = dst_w;
-        dst_rgb->height = dst_h;
-        dst_rgb->format = AV_PIX_FMT_RGB24;
-        if (av_frame_get_buffer(dst_rgb, 32) < 0) {
-            error_msg_ = "缩放失败：输出帧缓冲区分配失败";
-            return false;
-        }
-    }
-    // BGR→RGB，复制数据到AVFrame
-    cv::Mat dst_rgb_mat;
-    cv::cvtColor(resized_bgr, dst_rgb_mat, cv::COLOR_BGR2RGB);
-    for (int i = 0; i < dst_h; ++i) {
-        memcpy(
-               dst_rgb->data[0] + i * dst_rgb->linesize[0], // 目标行地址
-               dst_rgb_mat.data + i * dst_rgb_mat.step,      // 源行地址
-               dst_w * 3                                     // 每行字节数（RGB24：1像素3字节）
-               );
-    }
-    
-    return true;
-}
-
-bool FFmpegDecoder::normalizeRGBFrame(const AVFrame* rgb_frame, float* output_buf,
+bool FFmpegDecoder::normalizeBGRFrame(const AVFrame* bgr_frame, float* output_buf,
                                       const std::vector<float>& mean,
                                       const std::vector<float>& std) {
     // 入参校验（保留核心检查）
-    if (!rgb_frame || !output_buf || rgb_frame->format != AV_PIX_FMT_RGB24) {
-        error_msg_ = "归一化失败：输入帧无效或格式不是RGB24";
+    if (!bgr_frame || !output_buf || bgr_frame->format != AV_PIX_FMT_BGR24) {
+        error_msg_ = "归一化失败：输入帧无效或格式不是BGR24";
         return false;
     }
     if (std[0] == 0 || std[1] == 0 || std[2] == 0) {
@@ -700,8 +656,8 @@ bool FFmpegDecoder::normalizeRGBFrame(const AVFrame* rgb_frame, float* output_bu
         return false;
     }
     
-    const int frame_w = rgb_frame->width;
-    const int frame_h = rgb_frame->height;
+    const int frame_w = bgr_frame->width;
+    const int frame_h = bgr_frame->height;
     const int channel_size = frame_w * frame_h; // 单通道像素数
     
     // 1. 预计算常数倒数（除法转乘法，提升速度）
@@ -712,17 +668,17 @@ bool FFmpegDecoder::normalizeRGBFrame(const AVFrame* rgb_frame, float* output_bu
     // 2. 按行遍历（缓存友好：连续内存访问 NHWC格式：RRRGGGBBB....）
     for (int h = 0; h < frame_h; ++h) {
         // 行数据地址
-        const uint8_t* row_data = rgb_frame->data[0] + h * rgb_frame->linesize[0];
+        const uint8_t* row_data = bgr_frame->data[0] + h * bgr_frame->linesize[0];
         // 当前行在单通道中的起始索引
         const int row_base = h * frame_w;
         
         // 3. 循环展开（处理4个像素/次，减少循环次数）
         int w = 0;
         for (; w < frame_w - 3; w += 4) {
-            // 一次性读取4个像素的RGB数据（共12字节）
+            // 一次性读取4个像素的BGR数据（共12字节）
             const uint8_t* pixel = row_data + w * 3;
             
-            // 计算4个像素的R通道（并行处理）
+            // 计算4个像素的B通道（并行处理）
             output_buf[row_base + w]     = (pixel[0] * inv_255 - mean_vals[0]) * inv_std[0];
             output_buf[row_base + w + 1] = (pixel[3] * inv_255 - mean_vals[0]) * inv_std[0];
             output_buf[row_base + w + 2] = (pixel[6] * inv_255 - mean_vals[0]) * inv_std[0];
@@ -734,7 +690,7 @@ bool FFmpegDecoder::normalizeRGBFrame(const AVFrame* rgb_frame, float* output_bu
             output_buf[channel_size + row_base + w + 2] = (pixel[7] * inv_255 - mean_vals[1]) * inv_std[1];
             output_buf[channel_size + row_base + w + 3] = (pixel[10] * inv_255 - mean_vals[1]) * inv_std[1];
             
-            // 计算4个像素的B通道
+            // 计算4个像素的R通道
             output_buf[2 * channel_size + row_base + w]     = (pixel[2] * inv_255 - mean_vals[2]) * inv_std[2];
             output_buf[2 * channel_size + row_base + w + 1] = (pixel[5] * inv_255 - mean_vals[2]) * inv_std[2];
             output_buf[2 * channel_size + row_base + w + 2] = (pixel[8] * inv_255 - mean_vals[2]) * inv_std[2];

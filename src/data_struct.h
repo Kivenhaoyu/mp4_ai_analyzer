@@ -11,7 +11,7 @@
 #include <opencv2/opencv.hpp>
 #include "ai_infer.h"
 
-//解码线程->推理线程：传递 RGB
+//解码线程->推理线程：传递 BGR
 struct FrameData {
     cv::Mat rgb_mat;
     int frame_index;

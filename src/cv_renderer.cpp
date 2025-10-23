@@ -20,21 +20,21 @@ CVFrameRenderer::~CVFrameRenderer() {
     cv::destroyWindow(window_name_);
 }
 
-//渲染 RGB 数据
+//渲染 BGR 数据
 bool CVFrameRenderer::render(const uint8_t* rgb_data, int width, int height, const std::string& text){
     if (!rgb_data || width <= 0 || height <= 0) {
-        std::cerr << "渲染失败:无效的 RGB 数据或者尺寸" << std::endl;
+        std::cerr << "渲染失败:无效的 BGR 数据或者尺寸" << std::endl;
         return false;
     }
     
     std::lock_guard<std::mutex> lock(mutex_); // 线程安全
     
-    // 将 RGB 数据转换成 openCV 的 Mat (RGB24格式)
-    frame_ = cv::Mat(height, width, CV_8UC3, const_cast<uint8_t*>(rgb_data));
+    // 将 BGR 数据转换成 openCV 的 Mat (RGB24格式)
+    cv::Mat rgb_mat(height, width, CV_8UC3, const_cast<uint8_t*>(rgb_data));
     
-    //转换为 BGR 格式,（OpenCV imshow默认显示BGR）
-    cv::cvtColor(frame_, frame_, cv::COLOR_RGB2BGR);
-    
+    // 缩小到窗口尺寸（width/2, height/2）
+    cv::resize(rgb_mat, frame_, cv::Size(width/2, height/2), 0, 0, cv::INTER_LINEAR);
+        
     // 添加文字，如果有
     if (!text.empty()) {
         int font = cv::FONT_HERSHEY_SIMPLEX;

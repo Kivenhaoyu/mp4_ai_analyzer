@@ -19,6 +19,12 @@ extern "C" {
 #include <libavdevice/avdevice.h>
 }
 
+enum class ResizeMode {
+    STRETCH,    // 拉伸：直接缩放到目标尺寸（可能变形）
+    KEEP_BLACK, // 保留黑边：保持比例，不足部分填黑边（无变形）
+    CROP        // 裁剪适配：先裁剪到目标比例，再缩放（无变形、无黑边）
+};
+
 class FFmpegDecoder {
 public:
     FFmpegDecoder();
@@ -30,23 +36,16 @@ public:
     int getVideoHeight();
     std::string getErrorMsg();
     std::string getVideoCodecName();
-    // YUV 转 RGB
-    bool convertYuvToRgb(const AVFrame* yuv_frame, AVFrame* rgb_frame);
+    // YUV 转 BRG
+    bool convertCropResizeYuvToBgr(const AVFrame* yuv_frame, AVFrame* bgr_frame, int dst_w = 224, int dst_h = 224, ResizeMode mode = ResizeMode::STRETCH);
     
-    bool converUYUV422ToRgb(const AVFrame* yuv_frame, AVFrame*rgb_frame);
-    
-    bool saveRGBFrameToJPG(const AVFrame* rgb_frame, const std::string &save_path);
-    
-    // 留边框的裁剪
-    bool resizeRGBFrameWithBlank(const AVFrame *src_rgb, AVFrame *dst_rgb, int dst_w = 224, int dst_h = 224);
-    
-    // 不留边框 RGB帧缩放至目标尺寸（默认224×224，AI模型常用）
-    bool resizeRGBFrame(const AVFrame* src_rgb, AVFrame* dst_rgb, int dst_w = 224, int dst_h = 224);
-    
-    // RGB帧像素归一化：[0,255]→[(x/255 - mean)/std]（默认mean=0.5, std=0.5→范围[-1,1]）
-    bool normalizeRGBFrame(const AVFrame* rgb_frame, float* output_buf,
+    // BGR帧像素归一化：[0,255]→[(x/255 - mean)/std]（默认mean=0.5, std=0.5→范围[-1,1]）
+    bool normalizeBGRFrame(const AVFrame* bgr_frame, float* output_buf,
                            const std::vector<float>& mean,
                            const std::vector<float>& std);
+    
+    // for test
+    bool saveBGRFrameToJPG(const AVFrame* bgr_frame, const std::string &save_path);
 
 private:
     // 格式上下文（存储视频文件整体信息：路径，流数量，时长等）
@@ -63,7 +62,7 @@ private:
     std::unique_ptr<AVPacket,void(*)(AVPacket *)> packet_;
     
     SwsContext* sws_ctx_ = nullptr;
-        
+            
     const std::string saveError(int err_code, const std::string& prefix);
 };
 

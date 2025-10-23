@@ -12,14 +12,14 @@
 #include <mutex>
 #include <opencv2/opencv.hpp>
 
-// 渲染累，接收 RGB 数据并显示数据，支持叠加文字
+// 渲染累，接收 BGR 数据并显示数据，支持叠加文字
 class CVFrameRenderer {
 public:
     CVFrameRenderer(const std::string& window_name, int init_width = 640, int init_height = 480);
     
     ~CVFrameRenderer();
     
-    //渲染 RGB 数据
+    //渲染 BGR 数据
     bool render(const uint8_t* rgb_data, int width, int height, const std::string& text = "");
     
     //检查是否需要推出（按q键退出）
