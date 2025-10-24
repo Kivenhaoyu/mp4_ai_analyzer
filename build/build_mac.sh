@@ -2,7 +2,7 @@
 #!/bin/bash
 
 ##############################################################################
-# 1. 核心配置参数（根据你的目录结构修改，只改这里！）
+# 核心配置参数（根据你的目录结构修改，只改这里！）
 ##############################################################################
 # 👉 A 目录路径：CMakeLists.txt 所在的根目录（相对于当前脚本的路径）
 # 示例：若脚本在 B 目录，A 是 B 的上级目录 → "../"
@@ -17,9 +17,23 @@ XCODE_PROJECT_NAME="mp4_ai_analyzer"
 # 👉 编译模式：Debug（调试，默认）/ Release（发布优化）
 BUILD_TYPE="Debug"
 
+# 👉 依赖库路径
+ONNX_INSTALL_PATH="/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/onnxruntime"
+FFMPEG_INSTALL_PATH="/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/ffmpeg_install"
+OPENCV_INSTALL_PATH="/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/opencv-install"
 
 ##############################################################################
-# 2. 核心逻辑（无需修改，按配置自动执行）
+# 解析命令行参数（允许覆盖编译模式）
+##############################################################################
+while getopts "t:" opt; do
+  case $opt in
+    t) BUILD_TYPE="$OPTARG";;
+    *) echo "用法：$0 [-t Debug|Release]" && exit 1;;
+  esac
+done
+
+##############################################################################
+# 核心逻辑（无需修改，按配置自动执行）
 ##############################################################################
 # 步骤1：获取脚本所在目录的绝对路径（确保路径不混乱）
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -27,6 +41,7 @@ echo "===== 1. 脚本信息 ====="
 echo "脚本所在目录：${SCRIPT_DIR}"
 echo "CMake 根目录（CMakeList_DIR 目录）：${SCRIPT_DIR}/${CMakeList_DIR}"
 echo "构建产物目录：${SCRIPT_DIR}/${BUILD_DIR_NAME}"
+echo "编译模式：${BUILD_TYPE}"
 
 # 步骤2：检查 CMakeList_DIR 目录是否存在 CMakeLists.txt（基础校验）
 CMAKE_FILE="${SCRIPT_DIR}/${CMakeList_DIR}/CMakeLists.txt"
@@ -38,6 +53,22 @@ if [ ! -f "${CMAKE_FILE}" ]; then
     exit 1
 fi
 echo "✅ 找到 CMakeLists.txt：${CMAKE_FILE}"
+
+# 步骤2.5：检查依赖路径是否存在
+echo -e "\n===== 2.5 检查依赖路径 ====="
+if [ ! -d "${ONNX_INSTALL_PATH}" ]; then
+    echo "❌ 错误：ONNX路径不存在！路径：${ONNX_INSTALL_PATH}"
+    exit 1
+fi
+if [ ! -d "${FFMPEG_INSTALL_PATH}" ]; then
+    echo "❌ 错误：FFmpeg路径不存在！路径：${FFMPEG_INSTALL_PATH}"
+    exit 1
+fi
+if [ ! -d "${OPENCV_INSTALL_PATH}" ]; then
+    echo "❌ 错误：OpenCV路径不存在！路径：${OPENCV_INSTALL_PATH}"
+    exit 1
+fi
+echo "✅ 所有依赖路径均有效"
 
 # 步骤3：创建/清空独立的 build 目录
 BUILD_FULL_DIR="${SCRIPT_DIR}/${BUILD_DIR_NAME}"
@@ -66,6 +97,9 @@ cd "${BUILD_FULL_DIR}" || {
 # 执行 CMake 命令，指定生成 Xcode 项目
 cmake -G Xcode \
       -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+      -DONNX_INSTALL_PATH="${ONNX_INSTALL_PATH}" \
+      -DFFMPEG_INSTALL_PATH="${FFMPEG_INSTALL_PATH}" \
+      -DOPENCV_INSTALL_PATH="${OPENCV_INSTALL_PATH}" \
       "${SCRIPT_DIR}/${CMakeList_DIR}" || {
     echo -e "\n❌ 错误：CMake 生成 Xcode 项目失败！"
     echo "  请检查：1. CMakeList_DIR 目录 CMake 配置是否正确；2. 第三方库路径是否存在"

@@ -13,12 +13,13 @@
 #include <iomanip>
 #include <thread>
 
-#include "decoder.h"
-#include "frame_pool.h"
-#include "frame_guard.h"
-#include "ai_infer.h"
-#include "cv_renderer.h"
-#include "data_struct.h"
+#include "common/decoder/video_decoder.h"
+#include "common/util/frame_pool.h"
+#include "common/util/frame_guard.h"
+#include "common/ai_infer/ai_infer.h"
+#include "common/data_structs.h"
+#include "common/render/render_factory.h"
+
 using namespace std;
 
 void testCamera() {
@@ -35,7 +36,8 @@ void testCamera() {
 //    << "，高=" << height
 //    << "，目标帧率=" << decoder.getVideoCodecName() << std::endl;
     
-    CVFrameRenderer renderer("AI Camera Window", width / 2, height / 2); // 窗口名+初始尺寸
+    auto renderer = RendererFactory::createRenderer();
+    renderer->init("AI Camera Window", width / 2, height / 2);
     
     AVFramePool yuvpool(3,width,height,AV_PIX_FMT_UYVY422);
     AVFramePool resizedpool(3,224,224,AV_PIX_FMT_RGB24);
@@ -59,7 +61,7 @@ void testCamera() {
     const std::vector<float> mean = {0.485f, 0.456f, 0.406f};  // R, G, B 三个通道的均值
     const std::vector<float> std = {0.229f, 0.224f, 0.225f};   // 三个通道的标准差
     long long i = 0;
-    while(!renderer.shouldQuit()) {
+    while(!renderer->should_quit()) {
         i++;
         //        auto yuv_frame = yuvpool.getFrame();
         //        auto rgb_frame = rgbpool.getFrame(); // 用于接收RGB数据
@@ -117,10 +119,10 @@ void testCamera() {
         string render_text = ai_result.is_valid ?
                     (ai_result.class_name + " | confidence:" + std::to_string(ai_result.confidence).substr(0, 4)) :
                     "Unrecognized";
-        renderer.render(
-                        resize_frame->data[0],  // RGB数据
-                        resize_frame->width,    // 宽度
-                        resize_frame->height,   // 高度
+        FrameData frame_data = {resize_frame->data[0],  // RGB数据
+            resize_frame->width,    // 宽度
+            resize_frame->height,static_cast<double>(resize_frame->pts)};
+        renderer->render(frame_data,
                         render_text          // 叠加文字
                         );
         
@@ -176,7 +178,8 @@ void testLocalFile(string& file_path) {
 //    << "，高=" << height
 //    << "，目标帧率=" << decoder.getVideoCodecName() << std::endl;
     
-    CVFrameRenderer renderer("AI Local File Window", width / 2, height / 2); // 窗口名+初始尺寸
+    auto renderer = RendererFactory::createRenderer();
+    renderer->init("AI Camera Window", width / 2, height / 2);
     
     AVFramePool yuvpool(3,width,height,AV_PIX_FMT_YUV420P);
     AVFramePool rgbpool(3,width,height,AV_PIX_FMT_RGB24);
@@ -200,18 +203,13 @@ void testLocalFile(string& file_path) {
     const std::vector<float> mean = {0.485f, 0.456f, 0.406f};  // R, G, B 三个通道的均值
     const std::vector<float> std = {0.229f, 0.224f, 0.225f};   // 三个通道的标准差
     long long i = 0;
-    while (!renderer.shouldQuit()) {
+    while (!renderer->should_quit()) {
         i++;
-        //        auto yuv_frame = yuvpool.getFrame();
-        //        auto rgb_frame = rgbpool.getFrame(); // 用于接收RGB数据
-        //        auto resize_frame = resizedpool.getFrame();
         FrameGuard<AVFramePool> yuv_guard(yuvpool);
-        FrameGuard<AVFramePool> rgb_guard(rgbpool);
         FrameGuard<AVFramePool> resize_guard(resizedpool);
         
         // 2. 通过 guard 获取帧指针（无需手动调用 getFrame()）
         auto* yuv_frame = yuv_guard.get().get();  // 注意：双层 get()
-        auto* rgb_frame = rgb_guard.get().get();
         auto* resize_frame = resize_guard.get().get();
         
         // 打印当前耗时
@@ -253,13 +251,13 @@ void testLocalFile(string& file_path) {
 
         //渲染画面显示结果
         string render_text = ai_result.is_valid ?
-                    (ai_result.class_name + " | confidence:" + std::to_string(ai_result.confidence).substr(0, 4)) :
+                    ai_result.class_name :
                     "Unrecognized";
         auto render_start = std::chrono::high_resolution_clock::now();
-        renderer.render(
-                        resize_frame->data[0],  // RGB数据
-                        resize_frame->width,    // 宽度
-                        resize_frame->height,   // 高度
+        FrameData frame_data = {resize_frame->data[0],  // RGB数据
+            resize_frame->width,    // 宽度
+            resize_frame->height,static_cast<double>(resize_frame->pts)};
+        renderer->render(frame_data,
                         render_text          // 叠加文字
                         );
         auto render_end = std::chrono::high_resolution_clock::now();

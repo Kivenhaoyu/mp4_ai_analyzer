@@ -6,30 +6,34 @@
 //
 
 #include <stdio.h>
-#include "cv_renderer.h"
+#include "mac_renderer.h"
 
-CVFrameRenderer::CVFrameRenderer(const std::string& window_name, int init_width, int init_height):window_name_(window_name), is_quit_(false), is_pause_(false) {
+MACFrameRenderer::MACFrameRenderer():is_quit_(false), is_pause_(false) {
+}
+
+MACFrameRenderer::~MACFrameRenderer() {
+    //销毁 window
+    cv::destroyWindow(window_name_);
+}
+
+bool MACFrameRenderer::init(const std::string& title,int width, int height) {
+    window_name_ = title;
     // 创建窗口大小（可以调整）
     cv::namedWindow(window_name_,cv::WINDOW_AUTOSIZE);
 //    预缓存文字参数（固定格式，只计算一次）
     initTextCache();
 }
 
-CVFrameRenderer::~CVFrameRenderer() {
-    //销毁 window
-    cv::destroyWindow(window_name_);
-}
-
 //渲染 BGR 数据
-bool CVFrameRenderer::render(const uint8_t* rgb_data, int width, int height, const std::string& text){
-    if (!rgb_data || width <= 0 || height <= 0) {
+bool MACFrameRenderer::render(const FrameData& frame, const std::string& text){
+    if (!frame.data || frame.width <= 0 || frame.height <= 0) {
         std::cerr << "渲染失败:无效的 BGR 数据或者尺寸" << std::endl;
         return false;
     }
     std::lock_guard<std::mutex> lock(mutex_); // 线程安全
     
     // 将 BGR 数据转换成 openCV 的 Mat (RGB24格式)
-    frame_ = cv::Mat(height, width, CV_8UC3, const_cast<uint8_t*>(rgb_data));
+    frame_ = cv::Mat(frame.height, frame.width, CV_8UC3, const_cast<uint8_t*>(frame.data));
     // 添加文字，如果有
     if (!text.empty()) {
         int font = cv::FONT_HERSHEY_PLAIN;
@@ -49,20 +53,21 @@ bool CVFrameRenderer::render(const uint8_t* rgb_data, int width, int height, con
     
     //显示画面
     cv::imshow(window_name_, frame_);
-
+    
+    handleEvents();
 
     return  true;
     
 }
 
 //检查是否需要推出（按q键退出）
-bool CVFrameRenderer::shouldQuit() const {
+bool MACFrameRenderer::should_quit() {
     std::lock_guard<std::mutex> lock(mutex_);
     return is_quit_;
 }
 
 //暂停/继续
-void CVFrameRenderer::togglePause() {
+void MACFrameRenderer::toggle_pause() {
     std::lock_guard<std::mutex> lock(mutex_);
     is_pause_ = !is_pause_;
 }

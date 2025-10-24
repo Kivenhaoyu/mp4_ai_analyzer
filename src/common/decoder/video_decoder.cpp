@@ -6,7 +6,7 @@
 //
 
 
-#include "decoder.h"
+#include "video_decoder.h"
 #include <thread>
 #include <opencv2/opencv.hpp>
 

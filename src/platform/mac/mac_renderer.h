@@ -7,26 +7,32 @@
 
 #ifndef CV_RENDERER_H
 #define CV_RENDERER_H
-
+#pragma once
 #include <string>
 #include <mutex>
 #include <opencv2/opencv.hpp>
 
+#include "../../common/render/renderer.h"
+#include "../../common/platform.h"
+
+#ifdef PLATFORM_MAC // 仅Mac编译
+
 // 渲染累，接收 BGR 数据并显示数据，支持叠加文字
-class CVFrameRenderer {
+class MACFrameRenderer  : public Renderer {
 public:
-    CVFrameRenderer(const std::string& window_name, int init_width = 640, int init_height = 480);
+    MACFrameRenderer();
+    ~MACFrameRenderer();
     
-    ~CVFrameRenderer();
+    bool init(const std::string& title,int width, int height) override;
     
     //渲染 BGR 数据
-    bool render(const uint8_t* rgb_data, int width, int height, const std::string& text = "");
+    bool render(const FrameData& frame, const std::string& text) override;
     
     //检查是否需要推出（按q键退出）
-    bool shouldQuit() const;
+    bool should_quit() override;
     
     //暂停/继续
-    void togglePause();
+    void toggle_pause();
     
 private:
     std::string window_name_;       //窗口名称
@@ -65,5 +71,5 @@ private:
     
 };
 
-
+#endif // PLATFORM_MAC
 #endif /* CV_RENDERER_H */

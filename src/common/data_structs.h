@@ -9,12 +9,14 @@
 #define DATA_STRUCT_H
 
 #include <opencv2/opencv.hpp>
-#include "ai_infer.h"
+#include "ai_infer/ai_infer.h"
 
 //解码线程->推理线程：传递 BGR
 struct FrameData {
-    cv::Mat rgb_mat;
-    int frame_index;
+    uint8_t* data;     //内存由帧池管理
+    int width;         // 宽度
+    int height;        // 高度
+    double pts;        // 时间戳（跨平台通用）
 };
 
 //推理县城->渲染线程：帧+推理结果
