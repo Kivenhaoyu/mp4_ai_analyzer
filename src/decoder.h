@@ -37,7 +37,7 @@ public:
     std::string getErrorMsg();
     std::string getVideoCodecName();
     // YUV 转 BRG
-    bool convertCropResizeYuvToBgr(const AVFrame* yuv_frame, AVFrame* bgr_frame, int dst_w = 224, int dst_h = 224, ResizeMode mode = ResizeMode::STRETCH);
+    bool convertCropResizeYuvToBgr(const AVFrame* yuv_frame, AVFrame* bgr_frame, int dst_w = 224, int dst_h = 224, ResizeMode mode = ResizeMode::KEEP_BLACK);
     
     // BGR帧像素归一化：[0,255]→[(x/255 - mean)/std]（默认mean=0.5, std=0.5→范围[-1,1]）
     bool normalizeBGRFrame(const AVFrame* bgr_frame, float* output_buf,
@@ -46,7 +46,7 @@ public:
     
     // for test
     bool saveBGRFrameToJPG(const AVFrame* bgr_frame, const std::string &save_path);
-
+    
 private:
     // 格式上下文（存储视频文件整体信息：路径，流数量，时长等）
     AVFormatContext *format_ctx_ = nullptr;
@@ -61,8 +61,15 @@ private:
     // 数据包
     std::unique_ptr<AVPacket,void(*)(AVPacket *)> packet_;
     
-    SwsContext* sws_ctx_ = nullptr;
-            
+    SwsContext* sws_ctx_cache_ = nullptr;
+    int last_crop_w_ = -1, last_crop_h_ = -1;
+    int last_dst_w_ = -1, last_dst_h_ = -1;
+    AVPixelFormat last_src_fmt_ = AV_PIX_FMT_NONE;
+    ResizeMode last_mode_ = ResizeMode::STRETCH;
+    int last_mid_w_ = -1, last_mid_h_ = -1;  // 用于KEEP_BLACK模式
+    AVFrame* mid_frame_cache_ = nullptr;
+    
+    
     const std::string saveError(int err_code, const std::string& prefix);
 };
 

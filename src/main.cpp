@@ -31,9 +31,9 @@ void testCamera() {
     }
     int width = decoder.getVideoWidth();
     int height = decoder.getVideoHeight();
-    std::cout << "摄像头打开成功！宽=" << width
-    << "，高=" << height
-    << "，目标帧率=" << decoder.getVideoCodecName() << std::endl;
+    // std::cout << "摄像头打开成功！宽=" << width
+//    << "，高=" << height
+//    << "，目标帧率=" << decoder.getVideoCodecName() << std::endl;
     
     CVFrameRenderer renderer("AI Camera Window", width / 2, height / 2); // 窗口名+初始尺寸
     
@@ -84,7 +84,7 @@ void testCamera() {
         auto decode_end = std::chrono::high_resolution_clock::now();
         double decode_ms = std::chrono::duration<double,milli>(decode_end - decode_start).count();
         
-        std::cout << "解码摄像头第" << i << "帧成功" << std::endl;
+        // std::cout << "解码摄像头第" << i << "帧成功" << std::endl;
         auto conver_start = std::chrono::high_resolution_clock::now();
         if (!decoder.convertCropResizeYuvToBgr(yuv_frame, resize_frame)) {
             std::cerr << "第" << i << "帧转换失败：" << decoder.getErrorMsg() << std::endl;
@@ -95,7 +95,7 @@ void testCamera() {
         
         //        // 保存缩放后的JPG，检查尺寸和画质
         //        decoder.saveRGBFrameToJPG(resize_frame, "resized_frame_" + std::to_string(i) + ".jpg");
-        //        std::cout << "缩放后帧尺寸：" << resize_frame->width << "×" << resize_frame->height << std::endl;
+        //        // std::cout << "缩放后帧尺寸：" << resize_frame->width << "×" << resize_frame->height << std::endl;
         //
         
         auto normalize_start = std::chrono::high_resolution_clock::now();
@@ -125,14 +125,14 @@ void testCamera() {
                         );
         
         //打印AI推理结果
-        std::cout << "【第" << i << "帧 AI结果】";
+        // std::cout << "【第" << i << "帧 AI结果】";
         if (ai_result.is_valid) {
-            std::cout << "类别：" << ai_result.class_name
-            << " | 置信度：" << fixed << setprecision(2) << ai_result.confidence;
+            // std::cout << "类别：" << ai_result.class_name
+//            << " | 置信度：" << fixed << setprecision(2) << ai_result.confidence;
         } else {
-            std::cout << "未识别到有效物体（置信度：" << fixed << setprecision(2) << ai_result.confidence << "）";
+            // std::cout << "未识别到有效物体（置信度：" << fixed << setprecision(2) << ai_result.confidence << "）";
         }
-        std::cout << " | 推理耗时：" << ai_ms << "ms" << std::endl;
+        // std::cout << " | 推理耗时：" << ai_ms << "ms" << std::endl;
         
         // 强制延迟：保证每帧间隔≥33ms（匹配30FPS）
         auto end = std::chrono::high_resolution_clock::now();
@@ -140,7 +140,7 @@ void testCamera() {
         if (cost < 33) {
             std::this_thread::sleep_for(std::chrono::milliseconds(33 - cost));
         }
-        std::cout << "第" << i << "帧：解码=" << decode_ms << "ms，转换=" << "ms，归一=" << normalize_ms << "ms，AI=" << ai_ms << "ms，总=" << cost << "ms" << std::endl;
+         std::cout << "第" << i << "帧：解码=" << decode_ms << "ms，归一=" << normalize_ms << "ms，AI=" << ai_ms << "ms，总=" << cost << "ms" << std::endl;
     }
     ai_infer.destroy();
     delete[] model_input; // 释放缓冲区
@@ -172,9 +172,9 @@ void testLocalFile(string& file_path) {
     //    }
     int width = decoder.getVideoWidth();
     int height = decoder.getVideoHeight();
-    std::cout << "文件打开成功！宽=" << width
-    << "，高=" << height
-    << "，目标帧率=" << decoder.getVideoCodecName() << std::endl;
+    // std::cout << "文件打开成功！宽=" << width
+//    << "，高=" << height
+//    << "，目标帧率=" << decoder.getVideoCodecName() << std::endl;
     
     CVFrameRenderer renderer("AI Local File Window", width / 2, height / 2); // 窗口名+初始尺寸
     
@@ -227,7 +227,7 @@ void testLocalFile(string& file_path) {
         auto decode_end = std::chrono::high_resolution_clock::now();
         double decode_ms = std::chrono::duration<double,milli>(decode_end - decode_start).count();
         
-        std::cout << "解码本地文件第" << i << "帧成功" << std::endl;
+        // std::cout << "解码本地文件第" << i << "帧成功" << std::endl;
         auto resize_start = std::chrono::high_resolution_clock::now();
         if (!decoder.convertCropResizeYuvToBgr(yuv_frame, resize_frame)){
             std::cerr << "第" << i << "帧转换失败：" << decoder.getErrorMsg() << std::endl;
@@ -255,32 +255,34 @@ void testLocalFile(string& file_path) {
         string render_text = ai_result.is_valid ?
                     (ai_result.class_name + " | confidence:" + std::to_string(ai_result.confidence).substr(0, 4)) :
                     "Unrecognized";
+        auto render_start = std::chrono::high_resolution_clock::now();
         renderer.render(
                         resize_frame->data[0],  // RGB数据
                         resize_frame->width,    // 宽度
                         resize_frame->height,   // 高度
                         render_text          // 叠加文字
                         );
+        auto render_end = std::chrono::high_resolution_clock::now();
+        double render_ms = std::chrono::duration<double,milli>(render_end - render_start).count();
 
-        //打印AI推理结果
-        std::cout << "【第" << i << "帧 AI结果】";
+//        打印AI推理结果
+         std::cout << "【第" << i << "帧 AI结果】";
         if (ai_result.is_valid) {
-            std::cout << "类别：" << ai_result.class_name
+             std::cout << "类别：" << ai_result.class_name
             << " | 置信度：" << fixed << setprecision(2) << ai_result.confidence;
         } else {
-            std::cout << "未识别到有效物体（置信度：" << fixed << setprecision(2) << ai_result.confidence << "）";
+             std::cout << "未识别到有效物体（置信度：" << fixed << setprecision(2) << ai_result.confidence << "）";
         }
-        std::cout << " | 推理耗时：" << ai_ms << "ms" << std::endl;
+         std::cout << " | 推理耗时：" << ai_ms << "ms" << std::endl;
 
         // 强制延迟：保证每帧间隔≥33ms（匹配30FPS）
         auto end = std::chrono::high_resolution_clock::now();
         auto cost = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-        std::cout << "第" << i << "帧：解码=" << decode_ms << "ms，归一=" << normalize_ms << "ms，AI=" << ai_ms << "ms，总=" << cost << "ms" << std::endl;
+         std::cout << "第" << i << "帧：解码=" << decode_ms << "ms，归一=" << normalize_ms << "ms，render=" << render_ms << "ms，AI=" << ai_ms << "ms，总=" << cost << "ms" << std::endl;
     }
     ai_infer.destroy();
     delete[] model_input; // 释放缓冲区
     decoder.close();
-    std::cout << "本地视频测试结束" << std::endl;
 }
 
 void testCameraWith25FPS() {
@@ -301,7 +303,7 @@ void testCameraWith25FPS() {
             // 核心：每6帧丢弃1帧（30FPS → 25FPS：30/6=5，丢弃1帧后剩5，5*5=25）
             if (frame_count % 6 != 0) {  // 保留第1-5帧，丢弃第6帧
                 output_count++;
-                std::cout << "输出第" << output_count << "帧（原始第" << frame_count << "帧）" << std::endl;
+//                 std::cout << "输出第" << output_count << "帧（原始第" << frame_count << "帧）" << std::endl;
                 // 这里添加你的处理逻辑（如格式转换、输入AI模型）
             }
         }
@@ -318,10 +320,10 @@ int main() {
 //    // 再测试丢弃模式（允许丢旧数据）
 //    testDropPolicy();
 
-    //    avformat_network_init();
+        avformat_network_init();
     string file_path = "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/data/天鹅.mp4";
-//        testLocalFile(file_path);
-        testCamera();
+        testLocalFile(file_path);
+//        testCamera();
     
     return 0;
 }

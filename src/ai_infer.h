@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "onnxruntime_cxx_api.h"
+#include "onnxruntime_c_api.h"
 
 struct AIResult {
     std::string class_name;     //类别名称（如：“水杯”）

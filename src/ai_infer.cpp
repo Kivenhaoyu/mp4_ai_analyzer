@@ -10,6 +10,7 @@
 #include <fstream>
 #include <thread>
 #include "ai_infer.h"
+#include "coreml_provider_factory.h"
 
 //辅助函数： 获取 ONNX 模型的输入/输出节点名称（需要与模型匹配）
 
@@ -60,21 +61,28 @@ std::vector<std::string> load_imagenet_labels(const std::string& file_path) {
 bool AIInfer::init(const std::string &model_path) {
     try {
         //初始化环境（调整日志级别）
-        env_ = Ort::Env(ORT_LOGGING_LEVEL_WARNING, "MobileNetV2_Infer");
+        env_ = Ort::Env(ORT_LOGGING_LEVEL_VERBOSE, "MobileNetV2_Infer");
         // 配置会话选项（启动优化选项，比如算子融合）
         session_options_ = Ort::SessionOptions();
         session_options_.SetGraphOptimizationLevel(ORT_ENABLE_ALL); // 启用算子融合、常量折叠等
-        session_options_.SetIntraOpNumThreads(std::thread::hardware_concurrency()); // 自动获取核心数
-        session_options_.SetInterOpNumThreads(2); // 跨算子并行线程数
+//        线程配置（平衡CPU辅助计算和GPU调度）
+        session_options_.SetIntraOpNumThreads(2);  // 算子内线程（根据CPU核心数调整，如4核设4）
+        session_options_.SetInterOpNumThreads(1);  // 跨算子线程（保持不变）
+        // 配置 CoreML
+//        uint32_t coreml_flags = 0;  // 禁用CPU强制模式和ANE限制（关键）
+//        OrtSessionOptions* c_options = session_options_.GetUnowned();
+//        Ort::ThrowOnError(
+//            OrtSessionOptionsAppendExecutionProvider_CoreML(c_options, coreml_flags)
+//        );
         
         // 加载 ONNX 模型（创建会话）
         session_ = std::make_unique<Ort::Session>(env_,model_path.c_str(),session_options_);
-        
         // 获取输入/输出及诶但名称
         getModelInputOutputNmames(session_.get(), input_names_, output_names_);
         std::cout << input_names_.size() << std::endl;
         std::cout << "ONNX模型加载成功，输入节点：" << input_names_[0]
         << "，输出节点：" << output_names_[0] << "\n" << std::endl;
+        
         
         //        imagenet_labels_ = load_imagenet_labels(
         //            "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/imagenet_labels_chinese.txt"

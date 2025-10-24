@@ -10,9 +10,9 @@
 
 CVFrameRenderer::CVFrameRenderer(const std::string& window_name, int init_width, int init_height):window_name_(window_name), is_quit_(false), is_pause_(false) {
     // 创建窗口大小（可以调整）
-    cv::namedWindow(window_name_,cv::WINDOW_NORMAL);
-    // 根据初始化大小调整
-    cv::resizeWindow(window_name_, init_width, init_height);
+    cv::namedWindow(window_name_,cv::WINDOW_AUTOSIZE);
+//    预缓存文字参数（固定格式，只计算一次）
+    initTextCache();
 }
 
 CVFrameRenderer::~CVFrameRenderer() {
@@ -26,23 +26,18 @@ bool CVFrameRenderer::render(const uint8_t* rgb_data, int width, int height, con
         std::cerr << "渲染失败:无效的 BGR 数据或者尺寸" << std::endl;
         return false;
     }
-    
     std::lock_guard<std::mutex> lock(mutex_); // 线程安全
     
     // 将 BGR 数据转换成 openCV 的 Mat (RGB24格式)
-    cv::Mat rgb_mat(height, width, CV_8UC3, const_cast<uint8_t*>(rgb_data));
-    
-    // 缩小到窗口尺寸（width/2, height/2）
-    cv::resize(rgb_mat, frame_, cv::Size(width/2, height/2), 0, 0, cv::INTER_LINEAR);
-        
+    frame_ = cv::Mat(height, width, CV_8UC3, const_cast<uint8_t*>(rgb_data));
     // 添加文字，如果有
     if (!text.empty()) {
-        int font = cv::FONT_HERSHEY_SIMPLEX;
+        int font = cv::FONT_HERSHEY_PLAIN;
         double font_scale = 0.7;
         int thickness = 2;
         cv::Scalar text_color(255,255,255); //白色文字
         cv::Scalar bg_color(0,0,255); //红色背景
-        
+
         //文字尺寸
         cv::Size text_size = cv::getTextSize(text, font, font_scale, thickness, nullptr);
         //文字背景位置（左上角10，10）
@@ -54,26 +49,8 @@ bool CVFrameRenderer::render(const uint8_t* rgb_data, int width, int height, con
     
     //显示画面
     cv::imshow(window_name_, frame_);
-    
-    //处理键盘（q退出，空格暂停）
-    int key = cv::waitKey(1);  //等待1ms，检测输入
-    if (key == 'q' || key == 'Q') {
-        is_quit_ = true;
-    }else if (key == ' ') {
-        is_pause_ = !is_pause_;
-        std::cout << (is_pause_ ? "已暂停（按空格继续）" : "已继续") << std::endl;
-        if(is_pause_) {
-            // 暂停等待，直到再次按空格
-            while (is_pause_ && !is_quit_) {
-                key = cv::waitKey(100);
-                if (key == ' ') {
-                    is_pause_ = false;
-                }else if (key == 'q') {
-                    is_quit_ = true;
-                }
-            }
-        }
-    }
+
+
     return  true;
     
 }

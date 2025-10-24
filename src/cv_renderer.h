@@ -34,6 +34,34 @@ private:
     mutable std::mutex mutex_;      //线程安全锁
     bool is_quit_;                  //退出标志
     bool is_pause_;                 //暂停标志
+    // 预缓存的文字参数（避免重复计算）
+    int font_;
+    double font_scale_;
+    int thickness_;
+    cv::Scalar text_color_;
+    cv::Size text_size_;
+    
+    // 预初始化文字参数（只执行一次）
+        void initTextCache() {
+            font_ = cv::FONT_HERSHEY_PLAIN;
+            font_scale_ = 0.8;  // 小字体减少绘制开销
+            thickness_ = 1;     // 薄边框加速渲染
+            text_color_ = cv::Scalar(255, 255, 255);  // 白色文字（无需背景）
+
+            // 预计算最长可能文字的尺寸（避免每次调用getTextSize）
+            std::string max_text = "类别：xxx | 置信度：100.00 | 耗时：100.00ms";
+            text_size_ = cv::getTextSize(max_text, font_, font_scale_, thickness_, nullptr);
+        }
+
+        // 非阻塞处理按键事件（单次检查，无循环）
+        void handleEvents() {
+            int key = cv::waitKey(1);  // 1ms超时，非阻塞
+            if (key == 'q' || key == 'Q') {
+                is_quit_ = true;
+            } else if (key == ' ') {
+                is_pause_ = !is_pause_;
+            }
+        }
     
 };
 

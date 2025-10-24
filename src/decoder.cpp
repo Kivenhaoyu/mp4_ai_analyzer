@@ -232,14 +232,6 @@ bool FFmpegDecoder::openWithLocalFile(const std::string& file_path) {
     } else {
         std::cout << "使用软件解码" << std::endl;
     }
-    
-    // 初始化 SwsContext
-    sws_ctx_ = sws_getContext(codec_ctx_->width, codec_ctx_->height, AV_PIX_FMT_YUV420P, codec_ctx_->width, codec_ctx_->height, AV_PIX_FMT_BGR24, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
-    if (!sws_ctx_) {
-        error_msg_ = "SwsContext 初始化失败（YUV 转 BGR 上下文创建失败）";
-        close();  // 初始化失败，释放已分配的资源
-        return false;
-    }
     return true;
 }
 
@@ -395,25 +387,19 @@ bool FFmpegDecoder::openWithDevice(const std::string& camera_path, bool device_t
         std::cout << "使用软件解码" << std::endl;
     }
     
-    // 初始化 SwsContext
-    sws_ctx_ = sws_getContext(codec_ctx_->width, codec_ctx_->height, AV_PIX_FMT_UYVY422, codec_ctx_->width, codec_ctx_->height, AV_PIX_FMT_BGR24, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
-    if (!sws_ctx_) {
-        error_msg_ = "SwsContext 初始化失败（YUV 转 BGR 上下文创建失败）";
-        close();  // 初始化失败，释放已分配的资源
-        return false;
-    }
-    
     return true;
 }
 
 
 void FFmpegDecoder::close() {
-    
-    if (sws_ctx_) {
-        sws_freeContext(sws_ctx_);
-        sws_ctx_ = nullptr;
+    if (mid_frame_cache_) {
+        av_frame_free(&mid_frame_cache_);
+        mid_frame_cache_ = nullptr;
     }
-    
+    if (sws_ctx_cache_) {
+        sws_freeContext(sws_ctx_cache_);
+        sws_ctx_cache_ = nullptr;
+    }
     if (codec_ctx_) {
         if (codec_ctx_->hw_device_ctx) {
             av_buffer_unref(&codec_ctx_->hw_device_ctx);
@@ -452,6 +438,7 @@ bool FFmpegDecoder::getFrame(AVFrame *frame) {
         // 读取一个数据包（压缩数据）
         int ret = av_read_frame(format_ctx_, packet_.get());
         if (ret < 0) {
+            
             // 读取完毕或者出错：尝试 flush 解码器中剩余的帧
             avcodec_send_packet(codec_ctx_, nullptr);
         }else {
@@ -540,14 +527,14 @@ std::string FFmpegDecoder::getVideoCodecName() {
  * @param mode 缩放模式（STRETCH/KEEP_BLACK/CROP）
  * @return 成功返回true
  */
-bool FFmpegDecoder::convertCropResizeYuvToBgr(const AVFrame* src_yuv, AVFrame* bgr_frame,
+bool FFmpegDecoder::convertCropResizeYuvToBgr(const AVFrame* yuv_frame, AVFrame* bgr_frame,
                                               int dst_w, int dst_h, ResizeMode mode) {
     // 1. 入参校验
-    if (!src_yuv || !bgr_frame) {
+    if (!yuv_frame || !bgr_frame) {
         error_msg_ = "处理失败：输入/输出帧为空";
         return false;
     }
-    AVPixelFormat src_fmt = static_cast<AVPixelFormat>(src_yuv->format);
+    AVPixelFormat src_fmt = static_cast<AVPixelFormat>(yuv_frame->format);
     if (src_fmt != AV_PIX_FMT_YUV420P && src_fmt != AV_PIX_FMT_UYVY422) {
         error_msg_ = "暂不支持的YUV格式（仅支持YUV420P和UYVY422）";
         return false;
@@ -555,6 +542,55 @@ bool FFmpegDecoder::convertCropResizeYuvToBgr(const AVFrame* src_yuv, AVFrame* b
     if (dst_w <= 0 || dst_h <= 0) {
         error_msg_ = "目标尺寸无效（宽=" + std::to_string(dst_w) + ", 高=" + std::to_string(dst_h) + "）";
         return false;
+    }
+    
+    const int src_w = yuv_frame->width;
+    const int src_h = yuv_frame->height;
+    const float src_ratio = ((float)src_w)/src_h;
+    const float dst_ratio = ((float)dst_w)/dst_h;
+    
+    int mid_w = dst_w, mid_h = dst_h;
+    
+    int crop_w = src_w, crop_h = src_h;
+    int crop_x = 0, crop_y = 0;
+    
+    switch (mode) {
+        case ResizeMode::STRETCH:
+        {//默认拉伸
+            break;
+        }
+        case ResizeMode::KEEP_BLACK:
+        {   //保持比例，空白填黑色
+            if (src_ratio > dst_ratio) {
+                mid_h = static_cast<int>(dst_w / src_ratio);
+            }else {
+                mid_w = static_cast<int>(dst_h * src_ratio);
+            }
+            // 强制修正为正数（至少2像素，确保偶数）
+            mid_w = std::max(2, mid_w);
+            mid_h = std::max(2, mid_h);
+            mid_w = (mid_w % 2 == 0) ? mid_w : mid_w - 1;  // 确保偶数
+            mid_h = (mid_h % 2 == 0) ? mid_h : mid_h - 1;
+            break;
+        }
+        case ResizeMode::CROP:
+        {   //裁剪模式
+            if (src_ratio > dst_ratio) {
+                crop_w = crop_h * dst_ratio;
+            }else {
+                crop_h = crop_w / dst_ratio;
+            }
+            crop_x = MAX(0,(src_w - crop_w)/2);
+            crop_y = MAX(0,(src_h - crop_h)/2);
+            crop_w = MIN(crop_w, src_w-crop_x);
+            crop_h = MIN(crop_h, src_h-crop_y);
+            crop_w = (crop_w % 2 == 0) ? crop_w : crop_w - 1;
+            crop_h = (crop_h % 2 == 0) ? crop_h : crop_h - 1;
+            break;
+        }
+            
+        default:
+            break;
     }
     
     // 关键：检查并分配 bgr_frame 的缓冲区（若未分配）
@@ -574,37 +610,119 @@ bool FFmpegDecoder::convertCropResizeYuvToBgr(const AVFrame* src_yuv, AVFrame* b
         }
     }
     
+    // 准备数据源，为 crop 做数据准备
+    uint8_t* src_data[4]={nullptr};
+    int src_linesize[4]={0};
+    if (src_fmt == AV_PIX_FMT_YUV420P){
+        // yyyyuuvv
+        src_data[0] = const_cast<uint8_t*>(yuv_frame->data[0]) + crop_y * yuv_frame->linesize[0] + crop_x;
+        src_data[1] = const_cast<uint8_t*>(yuv_frame->data[1]) + crop_y * yuv_frame->linesize[1]/2 + crop_x/2;
+        src_data[2] = const_cast<uint8_t*>(yuv_frame->data[2]) + crop_y * yuv_frame->linesize[2]/2 + crop_x/2;
+        src_linesize[0] = yuv_frame->linesize[0];
+        src_linesize[1] = yuv_frame->linesize[1];
+        src_linesize[2] = yuv_frame->linesize[2];
+    }else if (src_fmt == AV_PIX_FMT_UYVY422) {
+        //bgrbgr
+        src_data[0] = const_cast<uint8_t*>(yuv_frame->data[0]) + crop_y * yuv_frame->linesize[0] + crop_x*2;
+        src_linesize[0] = yuv_frame->linesize[0];
+    }
+    
     // 创建缩放上下文
-    SwsContext* sws_ctx = sws_getContext(
-                                         src_yuv->width, src_yuv->height, static_cast<AVPixelFormat>(src_yuv->format),  // 源参数：宽、高、格式
-        dst_w, dst_h, AV_PIX_FMT_BGR24,    // 目标参数：宽、高、格式
-        SWS_BILINEAR,                      // 缩放算法（双线性插值，平衡速度和质量）
-        nullptr, nullptr, nullptr          // 滤波器参数（默认nullptr即可）
-    );
-
+    
+    SwsContext* sws_ctx = nullptr;
+    bool need_recreate = false;
+    // 计算当前所需参数
+    int current_src_w = crop_w;
+    int current_src_h = crop_h;
+    AVPixelFormat current_src_fmt = src_fmt;
+    int current_dst_w = (mode == ResizeMode::KEEP_BLACK) ? mid_w : dst_w;
+    int current_dst_h = (mode == ResizeMode::KEEP_BLACK) ? mid_h : dst_h;
+    
+    
+    // 检查是否需要重建上下文
+    if (!sws_ctx_cache_ ||
+        last_crop_w_ != current_src_w ||
+        last_crop_h_ != current_src_h ||
+        last_src_fmt_ != current_src_fmt ||
+        last_dst_w_ != current_dst_w ||
+        last_dst_h_ != current_dst_h ||
+        last_mode_ != mode) {
+        need_recreate = true;
+    }
+    
+    if (need_recreate) {
+        // 释放旧上下文
+        if (sws_ctx_cache_) {
+            sws_freeContext(sws_ctx_cache_);
+        }
+        // 创建新上下文
+        sws_ctx_cache_ = sws_getContext(
+                                        current_src_w, current_src_h, current_src_fmt,
+                                        current_dst_w, current_dst_h, AV_PIX_FMT_BGR24,
+                                        SWS_BILINEAR, nullptr, nullptr, nullptr
+                                        );
+        if (!sws_ctx_cache_) {
+            error_msg_ = "创建缩放上下文失败";
+            return false;
+        }
+        // 更新缓存参数
+        last_crop_w_ = current_src_w;
+        last_crop_h_ = current_src_h;
+        last_src_fmt_ = current_src_fmt;
+        last_dst_w_ = current_dst_w;
+        last_dst_h_ = current_dst_h;
+        last_mode_ = mode;
+    }
+    sws_ctx = sws_ctx_cache_;
+    
     if (!sws_ctx) {
         std::cerr << "创建缩放上下文失败" << std::endl;
         return false;
     }
     
     // 执行缩放（同时转换格式）
-    int ret = sws_scale(
-        sws_ctx,                  // 缩放上下文
-        src_yuv->data,            // 源数据指针（YUV420P的3个平面）
-        src_yuv->linesize,        // 源每行字节数（linesize，含对齐填充）
-        0,                        // 从源图像第0行开始处理
-                        src_yuv->height,                    // 处理的源图像行数（整个源图像高度）
-        bgr_frame->data,            // 目标数据指针（BGR24的单平面）
-                        bgr_frame->linesize         // 目标每行字节数（linesize）
-    );
-
-    // 检查缩放结果：返回值应为目标高度（dst_h），否则缩放失败
-    if (ret != dst_h) {
-        std::cerr << "缩放失败（实际处理行数：" << ret << "，预期：" << dst_h << "）" << std::endl;
-        sws_freeContext(sws_ctx);
+    bool success = false;
+    if (mode != ResizeMode::KEEP_BLACK) {
+        int ret = sws_scale(sws_ctx, src_data, src_linesize, 0, crop_h, bgr_frame->data, bgr_frame->linesize);
+        success = ret == dst_h;
+    } else {
+        if (!mid_frame_cache_) {
+            mid_frame_cache_ = av_frame_alloc();
+        }
+        // 检查中间帧尺寸是否匹配，不匹配则重新分配
+        if (mid_frame_cache_->width != mid_w || mid_frame_cache_->height != mid_h || mid_frame_cache_->format != AV_PIX_FMT_BGR24) {
+            av_frame_unref(mid_frame_cache_);  // 释放旧缓冲区
+            mid_frame_cache_->width = mid_w;
+            mid_frame_cache_->height = mid_h;
+            mid_frame_cache_->format = AV_PIX_FMT_BGR24;
+            if (av_frame_get_buffer(mid_frame_cache_, 32) < 0) {
+                error_msg_ = "中间帧缓冲区分配失败";
+                return false;
+            }
+        }
+        //先缩放到中间帧
+        int ret = sws_scale(sws_ctx, src_data, src_linesize, 0, crop_h, mid_frame_cache_->data, mid_frame_cache_->linesize);
+        if (ret != mid_h) {
+            error_msg_ = "中间帧缩放失败";
+            return false;
+        }
+        
+        memset(bgr_frame->data[0], 0, bgr_frame->linesize[0]*bgr_frame->height);
+        // 居中复制中间帧到目标帧（计算偏移：水平/垂直居中）
+        const int x_off = (dst_w - mid_w) / 2;  // 水平黑边宽度
+        const int y_off = (dst_h - mid_h) / 2;  // 垂直黑边高度
+        for (int y = 0; y < mid_h; ++y) {
+            uint8_t* src_row = mid_frame_cache_->data[0]+mid_frame_cache_->linesize[0]*y;
+            uint8_t* dst_row = bgr_frame->data[0]+bgr_frame->linesize[0] * (y+y_off) + x_off*3;
+            memcpy(dst_row, src_row, mid_w * 3);
+        }
+        success = true;
+    }
+    if (!success) {
+        error_msg_ = "缩放失败（实际处理行数不匹配）";
         return false;
     }
-
+    
     return true;
 }
 
@@ -613,7 +731,7 @@ bool FFmpegDecoder::saveBGRFrameToJPG(const AVFrame* bgr_frame, const std::strin
         error_msg_ = "保存JPG失败：RGB帧为空";
         return false;
     }
-
+    
     if (bgr_frame->format != AV_PIX_FMT_BGR24) {
         error_msg_ = "保存JPG失败：输入不是BGR24格式（实际格式：" + std::to_string(bgr_frame->format) + "）";
         return false;
@@ -628,19 +746,19 @@ bool FFmpegDecoder::saveBGRFrameToJPG(const AVFrame* bgr_frame, const std::strin
                     CV_8UC3,                    // 数据类型：8位无符号，3通道
                     bgr_frame->data[0],         // 像素数据起始地址
                     bgr_frame->linesize[0]);    // 每行数据的字节数（对齐用）
-
+    
     cv::Mat bgr_mat;
     cv::cvtColor(rgb_mat, bgr_mat, cv::COLOR_RGB2BGR);
-
+    
     // 4. 保存为JPG（质量可选，0-100，越高质量越好）
     std::vector<int> jpg_params = {cv::IMWRITE_JPEG_QUALITY, 90};
     if (!cv::imwrite(save_path, bgr_mat, jpg_params)) {
         error_msg_ = "保存JPG失败：无法写入文件（路径：" + save_path + "）";
         return false;
     }
-
+    
     return true;
-
+    
 }
 
 bool FFmpegDecoder::normalizeBGRFrame(const AVFrame* bgr_frame, float* output_buf,

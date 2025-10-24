@@ -15,7 +15,7 @@ include_directories(${ONNX_INSTALL_PATH}/include)
 # 库文件路径（正确，lib目录下存放dylib）
 link_directories(${ONNX_INSTALL_PATH}/lib)
 # 库名修正：CMake链接时不需要前缀"lib"和后缀".dylib"，直接写"onnxruntime.1.14.1"
-set(ONNX_LIBS onnxruntime.1.14.1)
+set(ONNX_LIBS onnxruntime.1.23.1)
 
 # 配置FFmpeg
 set(FFMPEG_INSTALL_PATH "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/ffmpeg_install")
@@ -62,6 +62,7 @@ target_link_libraries(
     "-framework CoreMedia"
     "-framework CoreGraphics"
     "-framework CoreVideo"
+    "-framework VideoToolbox"
     z
     iconv
     pthread
