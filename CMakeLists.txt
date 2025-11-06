@@ -66,6 +66,17 @@ endif()
 
 set(OPENCV_LIBS opencv_core opencv_highgui opencv_imgproc opencv_imgcodecs)
 
+# 配置GTest
+# set(GTEST_INSTALL_PATH "/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/gtest")
+include_directories(${GTEST_INSTALL_PATH}/include/gtest)
+if (PLATFORM_MAC)
+    link_directories(${GTEST_INSTALL_PATH}/lib/mac)
+else()
+    link_directories(${GTEST_INSTALL_PATH}/lib)
+endif()
+
+set(GTest_LIBS gtest)
+
 # 收集源文件
 file(GLOB_RECURSE ALL_SOURCE_FILES
     "${PROJECT_SOURCE_DIR}/src/*.h"
@@ -125,5 +136,86 @@ elseif(PLATFORM_WIN32)
     )
 endif()
 
+# -------------------------- 测试 Target 配置（GTest） --------------------------
+# 收集测试代码（test 目录下的所有代码）
+file(GLOB_RECURSE TEST_SOURCE_FILES
+    "${PROJECT_SOURCE_DIR}/test/*h"
+    "${PROJECT_SOURCE_DIR}/test/*hpp"
+    "${PROJECT_SOURCE_DIR}/test/*cpp"
+)
+
+if(TEST_SOURCE_FILES)
+    # 创建测试可执行目标
+    add_executable(mp4_ai_analyzer_tests ${TEST_SOURCE_FILES})
+
+    #【Xcode 适配】生成独立 scheme，支持调试和运行
+    set_target_properties(mp4_ai_analyzer_tests PROPERTIES XCODE_GENERATE_SCHEME ON # 自动生成 scheme，支持调试和运行
+    XCODE_SCHEME_NAME "test_mp4_ai_analyzer"  # xcode 中显示的名称
+    # 调试符号配置（Debug 模式）
+    XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT[variant=Debug] "dwarf-with-dsym"
+    # 运行时路径（解决动态库找不到的问题）
+    BUILD_RPATH "${FFMPEG_INSTALL_PATH}/lib/mac;${OPENCV_INSTALL_PATH}/lib/mac;${ONNX_INSTALL_PATH}/lib/mac;${GTEST_INSTALL_PATH}/lib/mac"
+    )
+    # 测试目标包含主程序头文件（可调用主项目代码）
+    target_include_directories(mp4_ai_analyzer_tests
+        PRIVATE "${PROJECT_SOURCE_DIR}/src"  # 主程序源码目录
+        PRIVATE ${ONNX_INSTALL_PATH}/include
+        PRIVATE ${FFMPEG_INSTALL_PATH}/include
+        PRIVATE ${OPENCV_INSTALL_PATH}/include/opencv4
+        PRIVATE ${GTEST_INSTALL_PATH}/include
+    )
+
+    # 为测试代码创建xcode 分组（与实际目录接受一致）
+    foreach(FILE ${TEST_SOURCE_FILES})
+        file(RELATIVE_PATH RELATIVE_FILE_PATH "${PROJECT_SOURCE_DIR}/test" "${FILE}")
+        get_filename_component(FILE_DIR "${RELATIVE_FILE_PATH}" DIRECTORY)
+        if(WIN32)
+            string(REPLACE "/" "\\" GROUP_NAME "test\\${FILE_DIR}")
+        else()
+            set(GROUP_NAME "test/${FILE_DIR}")
+        endif()
+        source_group("${GROUP_NAME}" FILES "${FILE}")
+    endforeach()
+    
+    # 链接测试依赖库（复用主程序的依赖）
+    target_link_libraries(mp4_ai_analyzer_tests
+        ${GTEST_LIBS}       # GTest 库
+        ${FFMPEG_LIBS}      # FFmpeg 依赖
+        ${OPENCV_LIBS}      # OpenCV 依赖
+        ${ONNX_LIBS}        # ONNX 依赖（若测试用到）
+        pthread             # 线程库
+        z                   # 压缩库
+    )
+
+    # 测试目标的平台特有链接（与主程序一致）
+    if(PLATFORM_MAC)
+        target_link_libraries(mp4_ai_analyzer_tests
+            "-framework Foundation"
+            "-framework AVFoundation"
+            "-framework CoreMedia"
+            "-framework CoreGraphics"
+            "-framework CoreVideo"
+            "-framework VideoToolbox"
+            iconv
+    )
+    elseif(PLATFORM_LINUX)
+        target_link_libraries(mp4_ai_analyzer_tests
+            dl
+            rt
+        )
+    elseif(PLATFORM_WIN32)
+        target_link_libraries(mp4_ai_analyzer_tests
+            ws2_32
+        )
+    endif()
+
+    enable_testing()
+    add_test(
+        NAME AllTests
+        COMMAND mp4_ai_analyzer_tests
+    )
+else()
+    message(WARNING "未找到测试代码（test 目录为空）， 测试 Target 未创建")
+endif()
 
 

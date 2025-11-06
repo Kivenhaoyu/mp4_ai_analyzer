@@ -21,6 +21,7 @@ BUILD_TYPE="Debug"
 ONNX_INSTALL_PATH="/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/onnxruntime"
 FFMPEG_INSTALL_PATH="/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/ffmpeg_install"
 OPENCV_INSTALL_PATH="/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/opencv-install"
+GTEST_INSTALL_PATH="/Users/elenahao/AaronWorkFiles/Ocean/mp4_ai_analyzer/lib/gtest"
 
 ##############################################################################
 # 解析命令行参数（允许覆盖编译模式）
@@ -68,6 +69,10 @@ if [ ! -d "${OPENCV_INSTALL_PATH}" ]; then
     echo "❌ 错误：OpenCV路径不存在！路径：${OPENCV_INSTALL_PATH}"
     exit 1
 fi
+if [ ! -d "${GTEST_INSTALL_PATH}" ]; then
+    echo "❌ 错误：GTEST路径不存在！路径：${GTEST_INSTALL_PATH}"
+    exit 1
+fi
 echo "✅ 所有依赖路径均有效"
 
 # 步骤3：创建/清空独立的 build 目录
@@ -100,6 +105,7 @@ cmake -G Xcode \
       -DONNX_INSTALL_PATH="${ONNX_INSTALL_PATH}" \
       -DFFMPEG_INSTALL_PATH="${FFMPEG_INSTALL_PATH}" \
       -DOPENCV_INSTALL_PATH="${OPENCV_INSTALL_PATH}" \
+      -DGTEST_INSTALL_PATH="${GTEST_INSTALL_PATH}" \
       "${SCRIPT_DIR}/${CMakeList_DIR}" || {
     echo -e "\n❌ 错误：CMake 生成 Xcode 项目失败！"
     echo "  请检查：1. CMakeList_DIR 目录 CMake 配置是否正确；2. 第三方库路径是否存在"
