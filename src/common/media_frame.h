@@ -28,6 +28,7 @@ enum class PixelFormat {
     YUV420P,   // 最常用的解码输出格式（YUV420P）
     BGR24,     // 适合渲染/UI的BGR格式（24位）
     RGB24,     // 适合AI模型的RGB格式（24位）
+    NV12,
     UYVY422    // 可能用于摄像头输入的YUV422格式
 };
 
@@ -45,7 +46,7 @@ enum class SampleFormat {
  * @param fmt 自定义像素格式
  * @return 格式名称字符串
  */
-std::string pixelFormatToString(PixelFormat fmt);
+std::string PixelFormatToString(PixelFormat fmt);
 
 /**
  * 音频采样格式转字符串（调试/日志用）
@@ -56,100 +57,160 @@ std::string SampleFormatToString(SampleFormat fmt);
 
 class MediaFrame {
 public:
-    MediaFrame() = delete;
+    using Ptr = std::shared_ptr<MediaFrame>;
+    using WeakPtr = std::weak_ptr<MediaFrame>;
     
+    virtual ~MediaFrame() = default;
+    
+    //禁止拷贝
+    MediaFrame(const MediaFrame&) = delete;
+    MediaFrame& operator = (const MediaFrame&) = delete;
+    
+    //允许移动
+    MediaFrame(MediaFrame&&) noexcept = default;
+    MediaFrame& operator = (MediaFrame &&) noexcept = default;
+    
+    //通用属性访问
+    MediaType type() const { return type_;}
+    int64_t pts() const { return pts_;}
+    int64_t dts() const { return dts_;}
+    int duration() const { return duration_;}
+    int streamIndex() const { return stream_idx_;}
+    bool isShallowCopy() const { return shallow_copy_;}
+    
+    //通用属性设置
+    void setPts(int64_t pts){ pts_ = pts;}
+    void setDts(int64_t dts){ dts_ = dts;}
+    void setDuration(int duration) { duration_ = duration;}
+    void setStreamIndex(int index) { stream_idx_ = index;}
+    void setShallowCopy(int flag) { shallow_copy_ = flag;}
+    
+    virtual std::string debugInfo() const = 0;
+    
+protected:
+    
+    explicit MediaFrame(MediaType type):type_(type) {}
+    
+private:
+    //媒体类型
+    MediaType type_ = MediaType::UNKNOWN;
+    int64_t pts_ = -1;          // 显示时间戳
+    int64_t dts_ = -1;          // 解码时间戳
+    int duration_ = 0;          // 持续时长
+    int stream_idx_ = -1;       // 所属流索引
+    bool shallow_copy_ = false; //标记是否是浅拷贝 AVFrame
+};
+
+class VideoFrame : public MediaFrame {
+public:
+    using Ptr = std::shared_ptr<VideoFrame>;
     /**
      * 从FFmpeg的AVFrame创建MediaFrame（核心工厂方法）
      * @param av_frame FFmpeg解码得到的AVFrame（所有权将被接管）
      * @return 共享指针包装的MediaFrame实例
      * @note 调用者无需手动释放av_frame，由MediaFrame内部管理
      */
-    static std::shared_ptr<MediaFrame> createFromAVFrame(AVFrame* av_frame);
+    static Ptr create(int width, int height, PixelFormat fmt) {
+        return std::make_shared<VideoFrame>(width,height,fmt);
+    }
     
-    /**
-     * 创建空帧（用于格式转换、处理的输出帧）
-     * @param width 帧宽度
-     * @param height 帧高度
-     * @param fmt 像素格式
-     * @return 共享指针包装的空MediaFrame实例（已分配内存）
-     */
-    static std::shared_ptr<MediaFrame> createEmpty(int width, int height, PixelFormat fmt);
+    int width() const { return  width_;}
+    int height() const { return height_;}
+    PixelFormat pixelFormat() const {return pix_fmt_;}
+    const std::vector<uint8_t*>& data() const {return data_;}
+    const std::vector<int>& linesize() const {return linesize_;}
     
-    // 析构函数（自动释放内部AVFrame资源）
-    ~MediaFrame();
+    // 属性设置
+    void setWidth(int width) { width_ = width;}
+    void setHeight(int height) { height_ = height;}
+    void setPixelFormat(PixelFormat fmt) {pix_fmt_ = fmt;}
+    void setData(const std::vector<uint8_t*>& data, const std::vecotr<int>& linesize) {
+        data_ = data;
+        linesize_ = linesize;
+    }
     
-    // 禁止拷贝（共享通过shared_ptr实现，避免数据冗余）
-    MediaFrame(const MediaFrame&) = delete;
-    MediaFrame& operator=(const MediaFrame&) = delete;
+    // 分配视频缓冲区（深拷贝时用）
+    bool allocateBuffers();
     
-    // 允许移动（高效传递所有权，如跨线程传递帧）
-    MediaFrame(MediaFrame&&) noexcept;
-    MediaFrame& operator=(MediaFrame&&) noexcept;
+    // 释放缓冲区（深拷贝自有数据）
+    void freeBuffer();
     
-    int width() const {return width_;}
-    int height() const {return height_;}
-    PixelFormat format() const {return format_;}
-    int64_t pts() const {return pts_;}
-    int64_t pts_ms()const {return pts_ms_;}
-    void setPts(int64_t pts);                       // 设置原始PTS并自动更新毫秒值
-    
-    /**
-     * 设置时间基准（来自AVStream->time_base）
-     * @param num 时间基准分子（如1）
-     * @param den 时间基准分母（如90000）
-     * @note 必须在设置PTS前调用，否则pts_ms_计算错误
-     */
-    void setTimeBase(int num, int den);
-    /**
-     * 获取像素数据指针（按平面存储）
-     * @return 数据指针数组（如YUV420P包含Y/U/V三个平面）
-     */
-    const std::vector<uint8_t*>& data() const { return data_; }
-    
-    /**
-     * 获取每行字节数（对齐用）
-     * @return 每行字节数数组（与data()对应）
-     */
-    const std::vector<int>& linesize() const { return linesize_; }
-    
-    /**
-     * 获取内部封装的AVFrame（仅用于与FFmpeg工具交互）
-     * @note 外部模块禁止调用，避免依赖FFmpeg细节
-     */
-    AVFrame* getAVFrame() const { return av_frame_; }
+    std::string debugInfo() const override {
+        std::stringstream ss;
+        ss << "VideoFrame: "
+        << "stream=" << stream_index() << ", "
+        << "w=" << width_ << ", h=" << height_ << ", "
+        << "fmt=" << PixelFormatToString(pix_fmt_) << ", "
+        << "pts=" << pts() << ", dts=" << dts() << ", "
+        << "shallow=" << (isShallowCopy() ? "yes" : "no");
+        return ss.str();
+    }
     
 private:
-    
-    explicit MediaFrame(AVFrame* av_frame);
-    MediaFrame(int width, int height, PixelFormat fmt);
-    
-    // 初始化数据指针
-    void initDataPointers();
-    
-    // 释放内部资源
-    void releaseResources();
-    
-    // FFmpeg与自定义像素格式互转（内部工具）
-    static PixelFormat avPixelFormatToCustom(int av_fmt);
-    static int customPixelFormatToAV(PixelFormat fmt);
-    
+    VideoFrame(int width, int height, PixelFormat fmt) : MediaFrame(MediaType::VIDEO), width_(width), height_(height), pix_fmt_(fmt) {}
     int width_ = 0;
     int height_ = 0;
-    PixelFormat format_ = PixelFormat::UNKNOWN;
-    
-    //时间戳
-    int64_t pts_ = -1;       //原始PTS（FFmpeg的time_base单位）
-    int64_t pts_ms_ = -1;    // 转换后的毫秒级PTS
-    int time_base_num_ = 1;  // 时间基准分子
-    int time_base_den_ = 1;  // 时间基准分母
-    
-    //像素数据 （引用AVFrame的数据，无拷贝）
-    std::vector<uint8_t*> data_;    // 数据指针数组（按平面存储）
-    std::vector<int> linesize_;     // 每行字节数数组（与data对应）
-    
-    AVFrame* av_frame_ = nullptr;   // 内部封装的FFmpeg AVFrame（对外隐藏）
+    PixelFormat pix_fmt_ = PixelFormat::UNKNOWN;
+    std::vector<uint8_t*>data_;  //数据平面指针
+    std::vector<int>linesize_;  //每行字节数
 };
 
-using MediaFramePtr = std::shared_ptr<MediaFrame>;
 
+class AudioFrame : public MediaFrame {
+public:
+    using Ptr = std::shared_ptr<AudioFrame>;
+    
+    static Ptr create(int sample_rate, int channels, SampleFormat fmt, int nb_samples) {
+        return std::make_shared<AudioFrame>(sample_rate,channels,fmt,nb_samples);
+    };
+    
+    //属性访问
+    int sampleRate() const { return sample_rate_;}
+    int channels() const { return channels_;}
+    SampleFormat sampleFormat() const { return sample_format_;}
+    int nbSamples() const { return nb_samples_;}
+    const uint8_t* data() const { return data_;}
+    const int dataSize() const { return data_size_;}
+    
+    // 设置对应值
+    void setSampleRate(int rate) { sample_rate_ = rate;}
+    void setChannels(int channels) { channels_ = channels;}
+    void setSampleFromat(SampleFormat fmt) {sample_format_ = fmt;}
+    void setNbSamples(int samples) { nb_samples_ = samples;}
+    void setData(uint8_t* data, const int size) {
+        data_ = data;
+        data_size_ = size;
+    }
+    
+    
+    // 分配缓冲区（深拷贝时用）
+    bool allocateBuffers();
+    
+    // 释放缓冲区（深拷贝自有数据）
+    void freeBuffer();
+    
+    // 调试信息
+    std::string debugInfo() const override {
+        std::stringstream ss;
+        ss << "AudioFrame: "
+        << "stream=" << streamIndex() << ", "
+        << "rate=" << sample_rate_ << ", ch=" << channels_ << ", "
+        << "fmt=" << SampleFormatToString(sample_format_) << ", "
+        << "samples=" << nb_samples_ << ", "
+        << "pts=" << pts() << ", dts=" << dts() << ", "
+        << "shallow=" << (isShallowCopy() ? "yes" : "no");
+        return ss.str();
+    }
+    
+private:
+    AudioFrame(int sample_rate, int channels, SampleFormat fmt,int nb_samples):MediaFrame(MediaType::AUDIO),sample_rate_(sample_rate),channels_(channels),sample_format_(fmt),nb_samples_(nb_samples) {}
+    
+    int sample_rate_ = 0;       // 采样率
+    int channels_ = 0;          // 声道数
+    SampleFormat sample_format_ = SampleFormat::UNKNOWN;  // 采样格式
+    int nb_samples_ = 0;        // 每帧采样数
+    uint8_t* data_ = nullptr;    // 音频数据大小（线性缓冲）
+    int data_size_ = 0;          // 数据大小（字节）
+    
+};
 #endif /* MEDIA_FRAME_H */
